@@ -206,6 +206,10 @@ if (BUILD_LLVM_UTILS OR BUILD_TV)
   add_llvm_executable(alive-exec
     "tools/alive-exec.cpp"
   )
+  
+  add_llvm_executable(alive-mutate
+    "tools/alive-mutate.cpp"
+  )
 
 else()
   set(LLVM_UTIL_SRCS "")
