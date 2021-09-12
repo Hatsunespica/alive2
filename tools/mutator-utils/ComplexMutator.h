@@ -49,7 +49,7 @@ class ComplexMutator{
 
     //some functions contain 'immarg' in their arguments. Skip those function calls.
     std::unordered_set<std::string> filterSet;
-    
+    std::string currFuncName;
     
     bool debug;
 
@@ -81,5 +81,6 @@ public:
     void setModule(std::unique_ptr<llvm::Module>&& ptr){
         pm=std::move(ptr);
     }
+    std::string getCurrentFunction()const{return currFuncName;}
 };
 

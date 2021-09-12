@@ -355,8 +355,8 @@ string getOutputFile(int ith,bool isOptimized){
 */
 void runOnce(int ith,llvm::LLVMContext& context,SingleLineMutator& mutator,ComplexMutator& cmutator){
     std::unique_ptr<llvm::Module> M1=nullptr;
-    bool isSimpleMutate=Random::getRandomBool();
-    if(isSimpleMutate){
+    bool isSimpleMutate=false;//Random::getRandomBool();
+    if(false){
       mutator.generateTest(getOutputFile(verbose?ith:-1));
       M1 = openInputFile(context, getOutputFile(verbose?ith:-1));
     }else{
@@ -381,10 +381,12 @@ void runOnce(int ith,llvm::LLVMContext& context,SingleLineMutator& mutator,Compl
     M2 = CloneModule(*M1);
     optimizeModule(M2.get());
 
-    for(llvm::Function& f1:*M1){
-      if(!f1.isDeclaration()){
-        if(llvm::Function* pf2=M2->getFunction(f1.getName());pf2!=nullptr){
-            if (!compareFunctions(f1, *pf2, TLI))
+    const string optFunc=cmutator.getCurrentFunction();
+    if(llvm::Function* pf1=M1->getFunction(optFunc);pf1!=nullptr){
+    //for(llvm::Function& f1:*M1){
+      if(!pf1->isDeclaration()){
+        if(llvm::Function* pf2=M2->getFunction(optFunc);pf2!=nullptr){
+            if (!compareFunctions(*pf1, *pf2, TLI))
               if (opt_error_fatal)
                 goto end;
         }
