@@ -14,14 +14,13 @@ bool ComplexMutator::openInputFile(const std::string &InputFilename){
 }
   
 bool ComplexMutator::init(){
-    //return true;
-
     bool result=false;
     for(fit=pm->begin();fit!=pm->end();++fit){
         for(bit=fit->begin();bit!=fit->end();++bit)
             for(iit=bit->begin();iit!=bit->end();++iit){
                 if(isReplaceable(&*iit)){
                 result=true;
+                currFuncName=fit->getName().str();
                 goto end;
                 }
             }
@@ -106,6 +105,7 @@ void ComplexMutator::moveToNextFuction(){
     DT=llvm::DominatorTree(*fit);
     bit=fit->begin();
     iit=bit->begin();
+    currFuncName=fit->getName().str();
 }
 
 void ComplexMutator::moveToNextBasicBlock(){
