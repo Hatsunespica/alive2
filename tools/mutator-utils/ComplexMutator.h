@@ -46,7 +46,7 @@ class ComplexMutator:public Mutator{
 
     //some functions contain 'immarg' in their arguments. Skip those function calls.
     std::unordered_set<std::string> filterSet;
-    
+    std::string currFuncName;
     
 
     decltype(pm->begin()) fit;
