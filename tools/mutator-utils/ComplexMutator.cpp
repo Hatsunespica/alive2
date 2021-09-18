@@ -1,18 +1,5 @@
 #include "ComplexMutator.h"
 
-bool ComplexMutator::openInputFile(const std::string &InputFilename){
-    auto MB =ExitOnErr(errorOrToExpected(llvm::MemoryBuffer::getFile(InputFilename)));
-    llvm::SMDiagnostic Diag;
-    pm = getLazyIRModule(std::move(MB), Diag, context,
-                            /*ShouldLazyLoadMetadata=*/true);
-    if (!pm) {
-        Diag.print("", llvm::errs(), false);
-        return false;
-    }
-    ExitOnErr(pm->materializeAll());
-    return true;
-}
-  
 bool ComplexMutator::init(){
     bool result=false;
     for(fit=pm->begin();fit!=pm->end();++fit){
@@ -39,7 +26,7 @@ end:
     return result;
 }
 
-void ComplexMutator::generateTest(const std::string& outputFileName){
+void ComplexMutator::mutateModule(const std::string& outputFileName){
     //return;
     restoreBackUp();
     for(auto it=iit->op_begin();it!=iit->op_end();++it){
