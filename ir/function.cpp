@@ -152,6 +152,15 @@ const BasicBlock& Function::getBB(string_view name) const {
   return BBs.at(string(name));
 }
 
+const BasicBlock& Function::bbOf(const Instr &i) const {
+  for (auto *bb : getBBs()) {
+    for (auto &ii : bb->instrs())
+      if (&ii == &i)
+        return *bb;
+  }
+  UNREACHABLE();
+}
+
 void Function::removeBB(BasicBlock &BB) {
   assert(BB.getName() != "#sink");
   BBs.erase(BB.getName());
@@ -1037,7 +1046,7 @@ void LoopAnalysis::run() {
 
     for (unsigned x : P) {
       header[x] = w;
-      uf.merge(x, w);
+      ENSURE(uf.merge(x, w) == w);
     }
   }
 

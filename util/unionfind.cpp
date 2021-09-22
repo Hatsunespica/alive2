@@ -2,7 +2,6 @@
 // Distributed under the MIT license that can be found in the LICENSE file.
 
 #include "util/unionfind.h"
-#include <vector>
 
 using namespace std;
 
@@ -28,10 +27,11 @@ unsigned UnionFind::find(unsigned i) {
   return root;
 }
 
-void UnionFind::merge(unsigned p, unsigned q) {
+unsigned UnionFind::merge(unsigned p, unsigned q) {
   unsigned i = find(p);
   unsigned j = find(q);
   id[i] = j;
+  return j;
 }
 
 }

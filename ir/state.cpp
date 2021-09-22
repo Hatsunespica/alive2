@@ -30,45 +30,54 @@ static T intersect_set(const T &a, const T &b) {
   return results;
 }
 
-void State::ValueAnalysis::intersect(const State::ValueAnalysis &other) {
+void State::ValueAnalysis::meet_with(const State::ValueAnalysis &other) {
   non_poison_vals = intersect_set(non_poison_vals, other.non_poison_vals);
   non_undef_vals = intersect_set(non_undef_vals, other.non_undef_vals);
   unused_vars = intersect_set(unused_vars, other.unused_vars);
 
-  for (auto &[fn, interval] : other.ranges_fn_calls) {
-    auto [I, inserted] = ranges_fn_calls.try_emplace(fn, 0, interval.second);
-    if (!inserted) {
-      I->second.first  = min(I->second.first, interval.first);
-      I->second.second = max(I->second.second, interval.second);
+  for (auto &[fn, calls] : other.ranges_fn_calls) {
+    auto [I, inserted] = ranges_fn_calls.try_emplace(fn, calls);
+    if (inserted) {
+      I->second.emplace(0);
+    } else {
+      I->second.insert(calls.begin(), calls.end());
     }
   }
 
-  for (auto &[fn, interval] : ranges_fn_calls) {
+  for (auto &[fn, calls] : ranges_fn_calls) {
     if (!other.ranges_fn_calls.count(fn))
-      interval.first = 0;
+      calls.emplace(0);
+  }
+}
+
+void State::ValueAnalysis::FnCallRanges::inc(const std::string &name) {
+  auto [I, inserted] = try_emplace(name);
+  if (inserted) {
+    I->second.emplace(1);
+  } else {
+    set<unsigned> new_set;
+    for (unsigned n : I->second) {
+      new_set.emplace(n+1);
+    }
+    I->second = move(new_set);
   }
 }
 
 bool
 State::ValueAnalysis::FnCallRanges::overlaps(const FnCallRanges &other) const {
-  auto overlaps = [](auto &a, auto &b) {
-    return (a.first <= b.first && a.second >= b.first) ||
-           (b.first <= a.first && b.second >= a.first);
-  };
-
-  for (auto &[fn, interval] : *this) {
+  for (auto &[fn, calls] : *this) {
     auto I = other.find(fn);
     if (I == other.end()) {
-      if (interval.first == 0)
+      if (calls.count(0))
         continue;
       return false;
     }
-    if (!overlaps(interval, I->second))
+    if (intersect_set(calls, I->second).empty())
       return false;
   }
 
-  for (auto &[fn, interval] : other) {
-    if (interval.first != 0 && !count(fn))
+  for (auto &[fn, calls] : other) {
+    if (!calls.count(0) && !count(fn))
       return false;
   }
 
@@ -112,11 +121,11 @@ void State::resetGlobals() {
   Memory::resetGlobals();
 }
 
-const StateValue& State::exec(const Value &v) {
+const State::ValTy& State::exec(const Value &v) {
   assert(undef_vars.empty());
   auto val = v.toSMT(*this);
   ENSURE(values_map.try_emplace(&v, (unsigned)values.size()).second);
-  values.emplace_back(&v, ValTy(move(val), move(undef_vars)));
+  values.emplace_back(&v, ValTy{move(val), domain.UB(), move(undef_vars)});
   analysis.unused_vars.insert(&v);
 
   // cleanup potentially used temporary values due to undef rewriting
@@ -124,7 +133,7 @@ const StateValue& State::exec(const Value &v) {
     tmp_values[--i_tmp_values] = StateValue();
   }
 
-  return get<1>(values.back()).first;
+  return get<1>(values.back());
 }
 
 static expr eq_except_padding(const Type &ty, const expr &e1, const expr &e2) {
@@ -350,7 +359,7 @@ StateValue* State::no_more_tmp_slots() {
 
 const StateValue& State::operator[](const Value &val) {
   auto &[var, val_uvars] = values[values_map.at(&val)];
-  auto &[sval, uvars] = val_uvars;
+  auto &[sval, _ub, uvars] = val_uvars;
 
   auto undef_itr = analysis.non_undef_vals.find(&val);
   bool is_non_undef = undef_itr != analysis.non_undef_vals.end();
@@ -421,7 +430,7 @@ const StateValue& State::operator[](const Value &val) {
 
 const StateValue& State::getAndAddUndefs(const Value &val) {
   auto &v = (*this)[val];
-  for (auto uvar: at(val).second)
+  for (auto uvar: at(val).undef_vars)
     addQuantVar(move(uvar));
   return v;
 }
@@ -541,7 +550,7 @@ bool State::startBB(const BasicBlock &bb) {
     if (isFirst)
       analysis = data.analysis;
     else
-      analysis.intersect(data.analysis);
+      analysis.meet_with(data.analysis);
     isFirst = false;
   }
 
@@ -622,18 +631,22 @@ void State::addUB(AndExpr &&ubs) {
     domain.undef_vars.insert(undef_vars.begin(), undef_vars.end());
 }
 
-void State::addNoReturn() {
-  return_memory.add(memory, domain.path);
-  function_domain.add(domain());
+void State::addNoReturn(const expr &cond) {
+  if (cond.isFalse())
+    return;
+  return_memory.add(memory, domain.path && cond);
+  function_domain.add(domain() && cond);
   return_undef_vars.insert(undef_vars.begin(), undef_vars.end());
   return_undef_vars.insert(domain.undef_vars.begin(), domain.undef_vars.end());
-  undef_vars.clear();
-  addUB(expr(false));
+  if (cond.isTrue())
+    undef_vars.clear();
+  addUB(!cond);
 }
 
 expr State::FnCallInput::operator==(const FnCallInput &rhs) const {
   if (readsmem != rhs.readsmem ||
       argmemonly != rhs.argmemonly ||
+      noret != rhs.noret || willret != rhs.willret ||
       (readsmem && (fncall_ranges != rhs.fncall_ranges || is_neq(m <=> rhs.m))))
     return false;
 
@@ -652,9 +665,11 @@ expr State::FnCallInput::refinedBy(
   State &s, const vector<StateValue> &args_nonptr2,
   const vector<Memory::PtrInput> &args_ptr2,
   const ValueAnalysis::FnCallRanges &fncall_ranges2,
-  const Memory &m2, bool readsmem2, bool argmemonly2) const {
+  const Memory &m2, bool readsmem2, bool argmemonly2, bool noret2,
+  bool willret2) const {
 
   if (readsmem != readsmem2 || argmemonly != argmemonly2 ||
+      noret != noret2 || willret != willret2 ||
       (readsmem && !fncall_ranges.overlaps(fncall_ranges2)))
     return false;
 
@@ -708,6 +723,7 @@ State::FnCallOutput State::FnCallOutput::mkIf(const expr &cond,
                                               const FnCallOutput &b) {
   FnCallOutput ret;
   ret.ub = expr::mkIf(cond, a.ub, b.ub);
+  ret.noreturns = expr::mkIf(cond, a.noreturns, b.noreturns);
   ret.callstate = Memory::CallState::mkIf(cond, a.callstate, b.callstate);
   assert(a.retvals.size() == b.retvals.size());
   for (unsigned i = 0, e = a.retvals.size(); i != e; ++i) {
@@ -719,6 +735,7 @@ State::FnCallOutput State::FnCallOutput::mkIf(const expr &cond,
 
 expr State::FnCallOutput::operator==(const FnCallOutput &rhs) const {
   expr ret = ub == rhs.ub;
+  ret &= noreturns == rhs.noreturns;
   for (unsigned i = 0, e = retvals.size(); i != e; ++i) {
     ret &= retvals[i] == rhs.retvals[i];
   }
@@ -730,12 +747,14 @@ vector<StateValue>
 State::addFnCall(const string &name, vector<StateValue> &&inputs,
                  vector<Memory::PtrInput> &&ptr_inputs,
                  const vector<Type*> &out_types, const FnAttrs &attrs) {
-  // TODO: can read/write=false fn calls be removed?
-
   bool reads_memory = !attrs.has(FnAttrs::NoRead);
   bool writes_memory = !attrs.has(FnAttrs::NoWrite);
   bool argmemonly = attrs.has(FnAttrs::ArgMemOnly);
+  bool noret = attrs.has(FnAttrs::NoReturn);
+  bool willret = attrs.has(FnAttrs::WillReturn);
   bool noundef = attrs.has(FnAttrs::NoUndef);
+
+  assert(!noret || !willret);
 
   bool all_valid = std::all_of(inputs.begin(), inputs.end(),
                                 [](auto &v) { return v.isValid(); }) &&
@@ -765,7 +784,7 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
             reads_memory ? analysis.ranges_fn_calls
                          : State::ValueAnalysis::FnCallRanges(),
             reads_memory ? memory : Memory(*this),
-            reads_memory, argmemonly });
+            reads_memory, argmemonly, noret, willret });
     auto &I = call_data_pair.first;
     bool inserted = call_data_pair.second;
 
@@ -785,9 +804,13 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
           noundef ? expr(true) : expr::mkFreshVar(npname.c_str(), false));
       }
 
-      string ub_name = name + "#ub";
+      string ub_name    = name + "#ub";
+      string noret_name = name + "#noreturn";
       I->second
         = { move(values), expr::mkFreshVar(ub_name.c_str(), false),
+            (noret || willret)
+              ? expr(noret)
+              : expr::mkFreshVar(noret_name.c_str(), false),
             writes_memory
               ? memory.mkCallState(name,
                                    argmemonly ? &I->first.args_ptr : nullptr,
@@ -805,6 +828,7 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
     }
 
     addUB(I->second.ub);
+    addNoReturn(I->second.noreturns);
     retval = I->second.retvals;
     if (writes_memory)
       memory.setState(I->second.callstate);
@@ -816,7 +840,7 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
     for (auto &[in, out] : fn_call_data[name]) {
       auto refined = in.refinedBy(*this, inputs, ptr_inputs,
                                   analysis.ranges_fn_calls, memory,
-                                  reads_memory, argmemonly);
+                                  reads_memory, argmemonly, noret, willret);
       data.add(out, move(refined));
     }
 
@@ -824,6 +848,7 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
       auto [d, domain, qvar, pre] = data();
       addUB(move(domain));
       addUB(move(d.ub));
+      addNoReturn(move(d.noreturns));
       retval = move(d.retvals);
       if (writes_memory)
         memory.setState(d.callstate);
@@ -839,13 +864,8 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
     }
   }
 
-  if (writes_memory) {
-    auto [I, inserted] = analysis.ranges_fn_calls.try_emplace(name, 1, 1);
-    if (!inserted) {
-      ++I->second.first;
-      ++I->second.second;
-    }
-  }
+  if (writes_memory)
+    analysis.ranges_fn_calls.inc(name);
 
   return retval;
 }
@@ -886,6 +906,10 @@ StateValue State::rewriteUndef(StateValue &&val, const set<expr> &undef_vars) {
   return val.subst(repls);
 }
 
+expr State::rewriteUndef(expr &&val, const set<expr> &undef_vars) {
+  return rewriteUndef({move(val), expr()}, undef_vars).value;
+}
+
 void State::finishInitializer() {
   is_initialization_phase = false;
 }
@@ -900,6 +924,16 @@ expr State::sinkDomain() const {
     ret.add(data.path());
   }
   return ret();
+}
+
+expr State::getJumpCond(const BasicBlock &src, const BasicBlock &dst) const {
+  auto I = predecessor_data.find(&dst);
+  if (I == predecessor_data.end())
+    return false;
+
+  auto J = I->second.find(&src);
+  return J == I->second.end() ? expr(false)
+                              : J->second.path() && *J->second.UB();
 }
 
 void State::addGlobalVarBid(const string &glbvar, unsigned bid) {

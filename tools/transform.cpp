@@ -105,9 +105,8 @@ static void print_varval(ostream &os, const State &st, const Model &m,
 using print_var_val_ty = function<void(ostream&, const Model&)>;
 
 static bool error(Errors &errs, const State &src_state, const State &tgt_state,
-                  const Result &r, const Value *var,
-                  const char *msg, bool check_each_var,
-                  print_var_val_ty print_var_val) {
+                  const Result &r, const Value *var, const char *msg,
+                  bool check_each_var, print_var_val_ty print_var_val) {
 
   if (r.isInvalid()) {
     errs.add("Invalid expr", false);
@@ -169,7 +168,7 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
         !dynamic_cast<const ConstantInput*>(var))
       continue;
     s << *var << " = ";
-    print_varval(s, src_state, m, var, var->getType(), val.first);
+    print_varval(s, src_state, m, var, var->getType(), val.val);
     s << '\n';
   }
 
@@ -183,19 +182,48 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
       }
     }
 
+    auto *bb = &st->getFn().getFirstBB();
+
     for (auto &[var, val] : st->getValues()) {
       auto &name = var->getName();
       if (name == var_name)
         break;
 
-      if (name[0] != '%' ||
-          dynamic_cast<const Input*>(var) ||
+      auto *i = dynamic_cast<const Instr*>(var);
+      if (!i || &st->getFn().bbOf(*i) != bb ||
           (check_each_var && !seen_vars.insert(name).second))
         continue;
 
+      if (auto *jmp = dynamic_cast<const JumpInstr*>(var)) {
+        bool jumped = false;
+        for (auto &dst : jmp->targets()) {
+          const expr &cond = st->getJumpCond(*bb, dst);
+          if ((jumped = !m.eval(cond).isFalse())) {
+            s << "  >> Jump to " << dst.getName() << '\n';
+            bb = &dst;
+            break;
+          }
+        }
+
+        if (jumped) {
+          continue;
+        } else {
+          s << "UB triggered on " << var->getName() << '\n';
+          break;
+        }
+      }
+
+      if (!dynamic_cast<const Return*>(var) && // domain always false after exec
+          !m.eval(val.domain).isTrue()) {
+        s << *var << " = UB triggered!\n";
+        break;
+      }
+
+      if (name[0] != '%')
+        continue;
+
       s << *var << " = ";
-      print_varval(s, const_cast<State&>(*st), m, var, var->getType(),
-                   val.first);
+      print_varval(s, const_cast<State&>(*st), m, var, var->getType(), val.val);
       s << '\n';
     }
 
@@ -336,27 +364,27 @@ static expr encode_undef_refinement(const Type &type, const State::ValTy &a,
 
   if (dynamic_cast<const VoidType *>(&type))
     return false;
-  if (b.second.empty())
+  if (b.undef_vars.empty())
     // target is never undef
     return false;
 
   auto subst = [](const auto &val) {
     vector<pair<expr, expr>> repls;
-    for (auto &v : val.second) {
+    for (auto &v : val.undef_vars) {
       repls.emplace_back(v, expr::some(v));
     }
-    return val.first.value.subst(repls);
+    return val.val.value.subst(repls);
   };
 
-  return encode_undef_refinement_per_elem(type, a.first, subst(a),
-                                          expr(b.first.value), subst(b));
+  return encode_undef_refinement_per_elem(type, a.val, subst(a),
+                                          expr(b.val.value), subst(b));
 }
 
 static void
 check_refinement(Errors &errs, const Transform &t, const State &src_state,
                  const State &tgt_state, const Value *var, const Type &type,
-                 const expr &dom_a, const expr &fndom_a, const State::ValTy &ap,
-                 const expr &dom_b, const expr &fndom_b, const State::ValTy &bp,
+                 const expr &fndom_a, const State::ValTy &ap,
+                 const expr &fndom_b, const State::ValTy &bp,
                  bool check_each_var) {
   if (src_state.sinkDomain().isTrue()) {
     errs.add("The source program doesn't reach a return instruction.\n"
@@ -371,12 +399,14 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
     return;
   }
 
-  auto &a = ap.first;
-  auto &b = bp.first;
+  auto &dom_a = ap.domain;
+  auto &dom_b = bp.domain;
+  auto &a = ap.val;
+  auto &b = bp.val;
 
-  auto &uvars = ap.second;
+  auto &uvars = ap.undef_vars;
   auto qvars = src_state.getQuantVars();
-  qvars.insert(ap.second.begin(), ap.second.end());
+  qvars.insert(ap.undef_vars.begin(), ap.undef_vars.end());
   auto &fn_qvars = tgt_state.getFnQuantVars();
   qvars.insert(fn_qvars.begin(), fn_qvars.end());
 
@@ -432,7 +462,7 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
             preprocess(t, qvars, uvars, pre && pre_src_forall.implies(refines));
   };
 
-  auto check = [&](expr &&e, auto &&printer, const char *msg) -> bool{
+  auto check = [&](expr &&e, auto &&printer, const char *msg) {
     e = mk_fml(move(e));
     auto res = check_expr(e);
     if (!res.isUnsat() &&
@@ -497,8 +527,8 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
     set<expr> undef;
     Pointer p(src_mem, m[ptr_refinement()]);
     s << "\nMismatch in " << p
-      << "\nSource value: " << Byte(src_mem, m[src_mem.load(p, undef)()])
-      << "\nTarget value: " << Byte(tgt_mem, m[tgt_mem.load(p, undef)()]);
+      << "\nSource value: " << Byte(src_mem, m[src_mem.raw_load(p, undef)()])
+      << "\nTarget value: " << Byte(tgt_mem, m[tgt_mem.raw_load(p, undef)()]);
   };
 
   CHECK(dom && !(memory_cnstr0.isTrue() ? memory_cnstr0
@@ -739,14 +769,18 @@ static void calculateAndInitConstants(Transform &t) {
   }
 
   num_ptrinputs = 0;
+  unsigned num_null_ptrinputs = 0;
   for (auto &arg : t.src.getInputs()) {
     auto n = num_ptrs(arg.getType());
     auto in = dynamic_cast<const Input*>(&arg);
     if (in && in->hasAttribute(ParamAttrs::ByVal)) {
       num_globals_src += n;
       num_globals += n;
-    } else
+    } else {
       num_ptrinputs += n;
+      if (!in || !in->hasAttribute(ParamAttrs::NonNull))
+        num_null_ptrinputs += n;
+    }
   }
 
   // The number of local blocks.
@@ -759,8 +793,8 @@ static void calculateAndInitConstants(Transform &t) {
   uint64_t min_global_size = UINT64_MAX;
 
   bool nullptr_is_used = false;
-  has_int2ptr      = false;
-  has_ptr2int      = false;
+  bool has_int2ptr     = false;
+  bool has_ptr2int     = false;
   has_alloca       = false;
   has_dead_allocas = false;
   has_malloc       = false;
@@ -770,6 +804,7 @@ static void calculateAndInitConstants(Transform &t) {
   does_ptr_store   = false;
   does_ptr_mem_access = false;
   does_int_mem_access = false;
+  observes_addresses  = false;
   bool does_any_byte_access = false;
 
   // Mininum access size (in bytes)
@@ -847,6 +882,7 @@ static void calculateAndInitConstants(Transform &t) {
         does_ptr_store       |= info.doesPtrStore;
         does_int_mem_access  |= info.hasIntByteAccess;
         does_mem_access      |= info.doesMemAccess();
+        observes_addresses   |= info.observesAddresses;
         min_access_size       = gcd(min_access_size, info.byteSize);
         if (info.doesMemAccess() && !info.hasIntByteAccess &&
             !info.doesPtrLoad && !info.doesPtrStore)
@@ -872,8 +908,8 @@ static void calculateAndInitConstants(Transform &t) {
         min_access_size = gcd(min_access_size, getCommonAccessSize(t));
 
       } else if (auto *ic = dynamic_cast<const ICmp*>(&i)) {
-        has_ptr2int |= ic->isPtrCmp() &&
-                       (ic->getPtrCmpMode() == ICmp::INTEGRAL);
+        observes_addresses |= ic->isPtrCmp() &&
+                              ic->getPtrCmpMode() == ICmp::INTEGRAL;
       }
     }
   }
@@ -903,7 +939,7 @@ static void calculateAndInitConstants(Transform &t) {
 
   // check if null block is needed
   // Global variables cannot be null pointers
-  has_null_block = num_ptrinputs > 0 || nullptr_is_used || has_malloc ||
+  has_null_block = num_null_ptrinputs > 0 || nullptr_is_used || has_malloc ||
                   has_ptr_load || has_fncall || has_int2ptr;
 
   num_nonlocals_src = num_globals_src + num_ptrinputs + num_nonlocals_inst_src +
@@ -913,6 +949,8 @@ static void calculateAndInitConstants(Transform &t) {
   num_nonlocals_src += has_fncall;
 
   num_nonlocals = num_nonlocals_src + num_globals - num_globals_src;
+
+  observes_addresses |= has_int2ptr || has_ptr2int;
 
   if (!does_int_mem_access && !does_ptr_mem_access && has_fncall)
     does_int_mem_access = true;
@@ -995,8 +1033,7 @@ static void calculateAndInitConstants(Transform &t) {
                   << "\nmemcmp_unroll_cnt: " << memcmp_unroll_cnt
                   << "\nlittle_endian: " << little_endian
                   << "\nnullptr_is_used: " << nullptr_is_used
-                  << "\nhas_int2ptr: " << has_int2ptr
-                  << "\nhas_ptr2int: " << has_ptr2int
+                  << "\nobserves_addresses: " << observes_addresses
                   << "\nhas_malloc: " << has_malloc
                   << "\nhas_free: " << has_free
                   << "\nhas_null_block: " << has_null_block
@@ -1085,10 +1122,9 @@ Errors TransformVerify::verify() const {
         if (name[0] != '%' || !dynamic_cast<const Instr*>(var))
           continue;
 
-        // TODO: add data-flow domain tracking for Alive, but not for TV
+        auto &val_tgt = tgt_state->at(*tgt_instrs.at(name));
         check_refinement(errs, t, *src_state, *tgt_state, var, var->getType(),
-                         true, true, val,
-                         true, true, tgt_state->at(*tgt_instrs.at(name)),
+                         val.domain, val, val_tgt.domain, val_tgt,
                          check_each_var);
         if (errs)
           return errs;
@@ -1096,10 +1132,8 @@ Errors TransformVerify::verify() const {
     }
 
     check_refinement(errs, t, *src_state, *tgt_state, nullptr, t.src.getType(),
-                     src_state->returnDomain()(), src_state->functionDomain()(),
-                     src_state->returnVal(),
-                     tgt_state->returnDomain()(), tgt_state->functionDomain()(),
-                     tgt_state->returnVal(),
+                     src_state->functionDomain()(), src_state->returnVal(),
+                     tgt_state->functionDomain()(), tgt_state->returnVal(),
                      check_each_var);
   } catch (AliveException e) {
     return move(e);
