@@ -253,13 +253,15 @@ version )EOF";
   }else if(timeElapsed>0){
     timeMode();
   }
+  if(verbose){
   std::cout<<"program ended\n";
+ 
   std::cout << "Summary:\n"
         "  " << tot_num_correct << " correct transformations\n"
         "  " << tot_num_unsound << " incorrect transformations\n"
         "  " << tot_num_failed  << " failed-to-prove transformations\n"
         "  " << tot_num_errors << " Alive2 errors\n";
-
+  }
   return num_errors > 0;
 }
 
@@ -384,11 +386,13 @@ void runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator){
       std::cout<<"Unsound found! at "<<ith<<"th copies\n";
 
     }
+    if(verbose){
     *out << "Summary:\n"
             "  " << num_correct << " correct transformations\n"
             "  " << num_unsound << " incorrect transformations\n"
             "  " << num_failed  << " failed-to-prove transformations\n"
             "  " << num_errors << " Alive2 errors\n";
+    }
   end:
     if (opt_smt_stats)
       smt::solver_print_stats(*out);
@@ -411,7 +415,7 @@ void copyMode(){
   if(mutators[0]->openInputFile(testfile)&&mutators[1]->openInputFile(testfile)){
     if(bool sInit=false&&mutators[0]->init(),cInit=mutators[1]->init();sInit||cInit){
       for(int i=0;i<numCopy;++i){
-        if(true){
+        if(verbose){
           std::cout<<"Running "<<i<<"th copies."<<std::endl;
         }
         if(sInit^cInit){
@@ -455,7 +459,7 @@ void timeMode(){
 
       auto t_end = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> cur=t_end-t_start;
-      if(true){
+      if(verbose){
         std::cout<<"Generted "+to_string(cnt)+"th copies in "+to_string((cur).count())+" seconds\n";
       }
       sum+=cur;
