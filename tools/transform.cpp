@@ -38,6 +38,11 @@ static bool is_arbitrary(const expr &e) {
 static void print_single_varval(ostream &os, const State &st, const Model &m,
                                 const Value *var, const Type &type,
                                 const StateValue &val, unsigned child) {
+  if (dynamic_cast<const VoidType*>(&type)) {
+    os << "void";
+    return;
+  }
+
   if (!val.isValid()) {
     os << "(invalid expr)";
     return;
@@ -82,9 +87,9 @@ static void print_single_varval(ostream &os, const State &st, const Model &m,
   }
 }
 
-static void print_varval(ostream &os, const State &st, const Model &m,
-                         const Value *var, const Type &type,
-                         const StateValue &val, unsigned child = 0) {
+void tools::print_model_val(ostream &os, const State &st, const Model &m,
+                            const Value *var, const Type &type,
+                            const StateValue &val, unsigned child) {
   if (!type.isAggregateType()) {
     print_single_varval(os, st, m, var, type, val, child);
     return;
@@ -95,8 +100,8 @@ static void print_varval(ostream &os, const State &st, const Model &m,
   for (unsigned i = 0, e = agg->numElementsConst(); i < e; ++i) {
     if (i != 0)
       os << ", ";
-    print_varval(os, st, m, var, agg->getChild(i), agg->extract(val, i),
-                 child + i);
+    tools::print_model_val(os, st, m, var, agg->getChild(i),
+                           agg->extract(val, i), child + i);
   }
   os << (type.isStructType() ? " }" : " >");
 }
@@ -168,7 +173,7 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
         !dynamic_cast<const ConstantInput*>(var))
       continue;
     s << *var << " = ";
-    print_varval(s, src_state, m, var, var->getType(), val.val);
+    print_model_val(s, src_state, m, var, var->getType(), val.val);
     s << '\n';
   }
 
@@ -208,7 +213,7 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
         if (jumped) {
           continue;
         } else {
-          s << "UB triggered on " << var->getName() << '\n';
+          s << "UB triggered on " << name << '\n';
           break;
         }
       }
@@ -223,7 +228,8 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
         continue;
 
       s << *var << " = ";
-      print_varval(s, const_cast<State&>(*st), m, var, var->getType(), val.val);
+      print_model_val(s, const_cast<State&>(*st), m, var, var->getType(),
+                      val.val);
       s << '\n';
     }
 
@@ -386,14 +392,14 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
                  const expr &fndom_a, const State::ValTy &ap,
                  const expr &fndom_b, const State::ValTy &bp,
                  bool check_each_var) {
-  if (src_state.sinkDomain().isTrue()) {
+  if (check_expr(!src_state.sinkDomain()).isUnsat()) {
     errs.add("The source program doesn't reach a return instruction.\n"
              "Consider increasing the unroll factor if it has loops", false);
     return;
   }
 
   auto sink_tgt = tgt_state.sinkDomain();
-  if (sink_tgt.isTrue()) {
+  if (check_expr(!sink_tgt).isUnsat()) {
     errs.add("The target program doesn't reach a return instruction.\n"
              "Consider increasing the unroll factor if it has loops", false);
     return;
@@ -497,9 +503,9 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
   // 3. Check poison
   auto print_value = [&](ostream &s, const Model &m) {
     s << "Source value: ";
-    print_varval(s, src_state, m, var, type, a);
+    print_model_val(s, src_state, m, var, type, a);
     s << "\nTarget value: ";
-    print_varval(s, tgt_state, m, var, type, b);
+    print_model_val(s, tgt_state, m, var, type, b);
   };
 
   auto [poison_cnstr, value_cnstr] = type.refines(src_state, tgt_state, a, b);
@@ -562,10 +568,13 @@ static unsigned num_ptrs(const Type &ty) {
 }
 
 static bool returns_local(const Value &v) {
+  // no alias fns return local block
+  if (auto call = dynamic_cast<const FnCall*>(&v))
+    return call->getAttributes().has(FnAttrs::NoAlias);
+
   return dynamic_cast<const Alloc*>(&v) ||
          dynamic_cast<const Malloc*>(&v) ||
          dynamic_cast<const Calloc*>(&v);
-         // TODO: add noalias fn
 }
 
 static Value *get_base_ptr(Value *ptr) {
@@ -1312,7 +1321,8 @@ static void optimize_ptrcmp(Function &f) {
     if (auto *gep = dynamic_cast<const GEP*>(&v))
       return gep->isInBounds();
 
-    return returns_local(v);
+    // noalias functions aren't required to return an inbounds ptr
+    return returns_local(v) && !dynamic_cast<const FnCall*>(&v);
   };
 
   for (auto &i : f.instrs()) {
