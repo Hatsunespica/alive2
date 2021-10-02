@@ -21,6 +21,7 @@ bool ComplexMutator::init(){
                     result=true;
                     currFuncName=fit->getName().str();
                     goto end;
+
                 }
             }
     }
@@ -28,6 +29,7 @@ end:
     if(result){
         calcDomInst();
     }
+
     return result;
 }
 
@@ -54,6 +56,7 @@ void ComplexMutator::mutateModule(const std::string& outputFileName){
     moveToNextReplaceableInst();
     while(newAdded.back()==&*iit)
         moveToNextReplaceableInst();
+
 }
 
 void ComplexMutator::restoreBackUp(){
@@ -89,6 +92,7 @@ bool ComplexMutator::isReplaceable(llvm::Instruction* inst){
     //don't do operations on Switch inst for now.
     if(llvm::isa<llvm::PHINode>(inst)||llvm::isa<llvm::GetElementPtrInst>(inst)||llvm::isa<llvm::AllocaInst>(inst)
         ||llvm::isa<llvm::SwitchInst>(inst)){
+
         return false;
     }
 
@@ -144,6 +148,7 @@ void ComplexMutator::calcDomInst(){
     for(auto bitTmp=bit->getParent()->begin();bitTmp!=bit;++bitTmp){
         for(auto iitTmp=bitTmp->begin();iitTmp!=bitTmp->end();++iitTmp){
             if(DT.dominates(&*iitTmp,&*iit)){
+
                 domInst.push_back(&*iitTmp);
             }
         }

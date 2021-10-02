@@ -28,6 +28,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/IR/Verifier.h"
 
+
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -101,6 +102,7 @@ Results verify(llvm::Function &F1, llvm::Function &F2,
   Results r;
   r.t.src = move(*fn1);
   r.t.tgt = move(*fn2);
+
   if (!always_verify) {
     stringstream ss1, ss2;
     r.t.src.print(ss1);
@@ -116,6 +118,7 @@ Results verify(llvm::Function &F1, llvm::Function &F2,
   smt_init->reset();
   r.t.preprocess();
   TransformVerify verifier(r.t, false);
+
   if (print_transform)
     r.t.print(*out, {});
 
@@ -141,19 +144,18 @@ unsigned num_correct = 0;
 unsigned num_unsound = 0;
 unsigned num_failed = 0;
 unsigned num_errors = 0;
+
 unsigned long long tot_num_correct=0;
 unsigned long long tot_num_unsound=0;
 unsigned long long tot_num_failed=0;
 unsigned long long tot_num_errors=0;
-
-
 
 bool compareFunctions(llvm::Function &F1, llvm::Function &F2,
                       llvm::TargetLibraryInfoWrapperPass &TLI) {
   auto r = verify(F1, F2, TLI, !opt_quiet, opt_always_verify);
   if (r.status == Results::ERROR) {
     *out << "ERROR: " << r.error;
-    std::cout<<"Error: "<<r.error<<std::endl;
+
     ++num_errors;
     return true;
   }
@@ -180,16 +182,13 @@ bool compareFunctions(llvm::Function &F1, llvm::Function &F2,
 
   case Results::UNSOUND:
     *out << "Transformation doesn't verify!\n\n";
-    if (!opt_quiet){
+    if (!opt_quiet)
       *out << r.errs << endl;
-      std::cout<<r.errs<<std::endl;
-    }
     ++num_unsound;
     return false;
 
   case Results::FAILED_TO_PROVE:
     *out << r.errs << endl;
-    std::cout<<r.errs<<std::endl;
     ++num_failed;
     return true;
   }
@@ -260,6 +259,7 @@ version )EOF";
         "  " << tot_num_unsound << " incorrect transformations\n"
         "  " << tot_num_failed  << " failed-to-prove transformations\n"
         "  " << tot_num_errors << " Alive2 errors\n";
+
   return num_errors > 0;
 }
 
@@ -379,13 +379,10 @@ void runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator){
         }
       }
     }
-
     if(num_unsound>0){
-      std::cout<<"Unsound found! at "<<ith<<"th copies, log recorded at log"<<logIndex<<".txt\n";
       ++logIndex;
-    }else if(num_errors>0){
-      std::cout<<"Alive2 error found! at "<<ith<<"th copies, log recorded at log"<<logIndex<<".txt\n";
-      ++logIndex;
+      std::cout<<"Unsound found! at "<<ith<<"th copies\n";
+
     }
     *out << "Summary:\n"
             "  " << num_correct << " correct transformations\n"
@@ -400,6 +397,7 @@ void runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator){
     tot_num_unsound+=num_unsound;
     tot_num_failed+=num_failed;
     tot_num_errors+=num_errors;
+
     num_correct=num_unsound=num_failed=num_errors=0;
     mutator.setModule(std::move(M1));
 }
@@ -441,6 +439,7 @@ void timeMode(){
     bool sInit=false;//mutators[0]->init();
     bool cInit=mutators[1]->init();
     if(!sInit&&!cInit){
+
       cerr<<"Cannot find any lotaion to mutate, "+testfile+" skipped\n";
       return;
     }
@@ -453,6 +452,7 @@ void timeMode(){
       }else{
         runOnce(cnt,context,*mutators[Random::getRandomUnsigned()&1]);
       }
+
       auto t_end = std::chrono::high_resolution_clock::now();
       std::chrono::duration<double> cur=t_end-t_start;
       if(true){
@@ -463,5 +463,6 @@ void timeMode(){
     }
   }else{
     cerr<<"Cannot open input file "+testfile+"!\n";
+
   }
 }

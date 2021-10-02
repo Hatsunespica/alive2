@@ -105,6 +105,7 @@ public:
         val1=binaryInst->getOperand(0),val2=binaryInst->getOperand(1);
     };
     virtual ~BinaryInstructionMutant(){if(mutatedInst!=nullptr)binaryInst->insertBefore(mutatedInst);};
+
     virtual void mutate(){
         
         replaceConstant(val1);
@@ -142,6 +143,7 @@ class GEPInstructionMutant:public Mutant{
 public:
     GEPInstructionMutant(llvm::GetElementPtrInst* GEPInst):GEPInst(GEPInst){isInBounds=GEPInst->isInBounds();};
     virtual ~GEPInstructionMutant(){}    
+
     virtual void mutate(){GEPInst->setIsInBounds(!isInBounds);};
     virtual void restoreMutate(){GEPInst->setIsInBounds(isInBounds);};    
     virtual bool isBoring()const{return true;};
@@ -154,6 +156,7 @@ public:
 
 #define setFuncAttr(flag,attrName) if(func->hasFnAttribute(attrName)){func->removeFnAttr(attrName);}if(flag){func->addFnAttr(attrName);}
 #define setFuncParamAttr(flag,index,attrName) if(func->hasParamAttribute(index,attrName)){func->removeParamAttr(index,attrName);}if(flag){func->addParamAttr(index,attrName);}
+
 class FunctionDefinitionMutant:public Mutant{
     llvm::Function* func;
     bool nofree;
@@ -161,6 +164,7 @@ class FunctionDefinitionMutant:public Mutant{
     std::vector<bool> nocapture;
 
 public:     
+
     FunctionDefinitionMutant(llvm::Function* func):func(func){
         nofree=func->hasFnAttribute(llvm::Attribute::AttrKind::NoFree);
         for(size_t i=0;i<func->arg_size();++i){
@@ -173,6 +177,7 @@ public:
         }
     };
     virtual ~FunctionDefinitionMutant(){};
+
     virtual void mutate(){
         setFuncAttr(Random::getRandomBool(),llvm::Attribute::AttrKind::NoFree);
         for(size_t i=0;i<func->arg_size();++i){
@@ -199,6 +204,7 @@ public:
     }
     virtual bool isBoring()const{
         return std::none_of(func->arg_begin(),func->arg_end(),[](const llvm::Argument& arg){return arg.getType()->isPointerTy();});
+
     }  
     virtual void print()const{
         llvm::errs()<<"Function name:\n";
