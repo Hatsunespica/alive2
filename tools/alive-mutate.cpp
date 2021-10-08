@@ -250,6 +250,8 @@ version )EOF";
   //llvm::cl::HideUnrelatedOptions(alive_cmdargs);
   llvm::cl::HideUnrelatedOptions(mutatorArgs);
   llvm::cl::ParseCommandLineOptions(argc, argv, Usage);
+  if(outputFolder.back()!='/')
+    outputFolder+='/';
 
   if(numCopy<0&&timeElapsed<0){
     cerr<<"Please specify either number of copies or running time!\n";
@@ -398,7 +400,9 @@ void runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator){
     if(num_unsound>0){
       ++logIndex;
       std::cout<<"Unsound found! at "<<ith<<"th copies\n";
-
+    }else if(num_errors){
+      ++logIndex;
+      std::cout<<"Alive error found! at"<<ith<<"th copies\n";
     }
     if(verbose){
     *out << "Summary:\n"
