@@ -85,13 +85,13 @@ class llvm2alive_ : public llvm::InstVisitor<llvm2alive_, unique_ptr<Instr>> {
   auto DL() const { return f.getParent()->getDataLayout(); }
 
   template <typename T>
-  unsigned alignment(T &i, llvm::Type *ty) const {
+  uint64_t alignment(T &i, llvm::Type *ty) const {
     auto a = i.getAlignment();
     return a != 0 ? a : DL().getABITypeAlignment(ty);
   }
 
   template <typename T>
-  unsigned pref_alignment(T &i, llvm::Type *ty) const {
+  uint64_t pref_alignment(T &i, llvm::Type *ty) const {
     auto a = i.getAlignment();
     return a != 0 ? a : DL().getPrefTypeAlignment(ty);
   }
@@ -1098,7 +1098,7 @@ public:
         attrs.set(ParamAttrs::ByVal);
         auto ty = aset.getByValType();
         auto asz = DL().getTypeAllocSize(ty);
-        attrs.blockSize = max(attrs.blockSize, (unsigned)asz.getKnownMinSize());
+        attrs.blockSize = max(attrs.blockSize, asz.getKnownMinSize());
 
         attrs.set(ParamAttrs::Align);
         attrs.align = max(attrs.align, DL().getABITypeAlignment(ty));
@@ -1145,8 +1145,7 @@ public:
 
       case llvm::Attribute::Alignment:
         attrs.set(ParamAttrs::Align);
-        attrs.align = max(attrs.align,
-                          (unsigned)llvmattr.getAlignment()->value());
+        attrs.align = max(attrs.align, llvmattr.getAlignment()->value());
         continue;
 
       case llvm::Attribute::NoUndef:

@@ -236,8 +236,7 @@ void BinOp::print(ostream &os) const {
     os << "nuw ";
   if (flags & Exact)
     os << "exact ";
-  os << fmath
-     << print_type(getType()) << lhs->getName() << ", " << rhs->getName();
+  os << fmath << *lhs << ", " << rhs->getName();
 }
 
 static void div_ub(State &s, const expr &a, const expr &b, const expr &ap,
@@ -2705,7 +2704,7 @@ bool Malloc::canFree() const {
   return ptr != nullptr;
 }
 
-unsigned Malloc::getAlign() const {
+uint64_t Malloc::getAlign() const {
   return align ? align : heap_block_alignment;
 }
 
@@ -2805,7 +2804,7 @@ Calloc::ByteAccessInfo Calloc::getByteAccessInfo() const {
   return info;
 }
 
-unsigned Calloc::getAlign() const {
+uint64_t Calloc::getAlign() const {
   return align ? align : heap_block_alignment;
 }
 
@@ -3870,6 +3869,7 @@ const ConversionOp* isCast(ConversionOp::Op op, const Value &v) {
 
 bool hasNoSideEffects(const Instr &i) {
   return isNoOp(i) ||
+         dynamic_cast<const ExtractValue*>(&i) ||
          dynamic_cast<const GEP*>(&i) ||
          dynamic_cast<const ShuffleVector*>(&i);
 }
