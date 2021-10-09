@@ -269,7 +269,7 @@ version )EOF";
   }else if(timeElapsed>0){
     timeMode();
   }
-  if(verbose){
+  //if(verbose){
   std::cout<<"program ended\n";
  
   std::cout << "Summary:\n"
@@ -277,7 +277,7 @@ version )EOF";
         "  " << tot_num_unsound << " incorrect transformations\n"
         "  " << tot_num_failed  << " failed-to-prove transformations\n"
         "  " << tot_num_errors << " Alive2 errors\n";
-  }
+  //}
   return num_errors > 0;
 }
 
