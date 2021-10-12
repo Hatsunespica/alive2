@@ -208,14 +208,14 @@ bool compareFunctions(llvm::Function &F1, llvm::Function &F2,
     if (!opt_quiet)
       *out << r.errs << endl;
     ++num_unsound;
-    return false;
+    return true;
 
   case Results::FAILED_TO_PROVE:
     *out << r.errs << endl;
     ++num_failed;
     return true;
   }
-  return true;
+  return false;
 }
 
 void optimizeModule(llvm::Module *M) {
@@ -240,7 +240,7 @@ void optimizeModule(llvm::Module *M) {
 }
 
 int logIndex;
-void copyMode(),timeMode(),loggerInit(llvm::Module* pm),init(),runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator),programEnd();
+void copyMode(),timeMode(),loggerInit(int ith),init(),runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator),programEnd(),deleteLog(int ith);
 bool isValidInputPath(),isValidOutputPath();
 string getOutputFile(int ith,bool isOptimized=false);
 
@@ -319,8 +319,10 @@ void programEnd(){
         "  " << tot_num_unsound << " incorrect transformations\n"
         "  " << tot_num_failed  << " failed-to-prove transformations\n"
         "  " << tot_num_errors << " Alive2 errors\n";
+}
 
-  fs::path fname = testfile+"-log"+to_string(logIndex)+".txt";
+void deleteLog(int ith){
+  fs::path fname = getOutputFile(ith)+"-log"+".txt";
   fs::path path = fs::path(outputFolder.getValue()) / fname.filename();
   fs::remove(path);
 }
@@ -329,14 +331,13 @@ void programEnd(){
  * Set Alive2's log path. if verbose flag is used, it could output to /def/null or stdout. 
  * Otherwise it will output to file if find a value mismatch
 */
-void loggerInit(llvm::Module* pm){
+void loggerInit(int ith){
   static std::ofstream nout("/dev/null");
   if(verbose){
       out=&nout;
       //out=&cout;
   }else{
-      //auto &source_file = pm->getSourceFileName();
-      fs::path fname = testfile+"-log"+to_string(logIndex)+".txt";
+      fs::path fname = getOutputFile(ith)+"-log"+".txt";
       fs::path path = fs::path(outputFolder.getValue()) / fname.filename();
       if(out_file.is_open()){
         out_file.flush();
@@ -350,7 +351,6 @@ void loggerInit(llvm::Module* pm){
       }
 
       report_filename = path;
-      //*out << "Source: " << source_file << endl;
       report_dir_created = true;
 
       if (opt_smt_log) {
@@ -397,7 +397,7 @@ void runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator){
       cerr << "Could not read file from '" << getOutputFile(ith)<< "'\n";
       return;
     }
-    loggerInit(M1.get());
+    loggerInit(ith);
 
     auto &DL = M1.get()->getDataLayout();
     llvm::Triple targetTriple(M1.get()->getTargetTriple());
@@ -411,12 +411,15 @@ void runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator){
     optimizeModule(M2.get());
 
     const string optFunc=mutator.getCurrentFunction();
+    bool shouldLog=false;
     if(llvm::Function* pf1=M1->getFunction(optFunc);pf1!=nullptr){
       if(!pf1->isDeclaration()){
         if(llvm::Function* pf2=M2->getFunction(optFunc);pf2!=nullptr){
-            if (!compareFunctions(*pf1, *pf2, TLI))
+            if (compareFunctions(*pf1, *pf2, TLI)){
+              shouldLog=true;
               if (opt_error_fatal)
                 goto end;
+            }
         }
       }
     }
@@ -427,6 +430,7 @@ void runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator){
       ++logIndex;
       std::cout<<"Alive error found! at"<<ith<<"th copies\n";
     }
+
     if(verbose){
     *out << "Summary:\n"
             "  " << num_correct << " correct transformations\n"
@@ -445,6 +449,11 @@ void runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator){
 
     num_correct=num_unsound=num_failed=num_errors=0;
     mutator.setModule(std::move(M1));
+    if(shouldLog){
+      mutator.saveModule(getOutputFile(ith));
+    }else{
+      deleteLog(ith);
+    }
 }
 
 /*

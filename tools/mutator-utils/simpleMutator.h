@@ -44,6 +44,7 @@ public:
     bool openInputFile(const string& inputFile);
     virtual bool init()=0;
     virtual void mutateModule(const std::string& outputFileName)=0;
+    virtual void saveModule(const std::string& outputFileName)=0;
     virtual std::string getCurrentFunction()const=0;
     void setDebug(bool debug){this->debug=debug;}
     std::unique_ptr<llvm::Module> getModule(){return std::move(pm);}
@@ -237,7 +238,9 @@ class SimpleMutator:public Mutator{
 public:
     SimpleMutator(bool debug=false):Mutator(debug),isFirstRun(true){};
     virtual ~SimpleMutator(){mutants.clear();};
-    virtual bool init();
-    virtual void mutateModule(const string& outputFileName);
-    virtual std::string getCurrentFunction()const{return it->second.str();};
+    virtual bool init()override;
+    virtual void mutateModule(const string& outputFileName)override;
+    virtual std::string getCurrentFunction()const override{return it->second.str();};
+    //needs to be fixed
+    virtual void saveModule(const std::string& outputFileName)override{};
 };
