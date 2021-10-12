@@ -121,8 +121,8 @@ Results verify(llvm::Function &F1, llvm::Function &F2,
     r.t.src.print(ss1);
     r.t.tgt.print(ss2);
     if (ss1.str() == ss2.str()) {
-      if (print_transform)
-        r.t.print(*out, {});
+      //if (print_transform)
+      //  r.t.print(*out, {});
       r.status = Results::SYNTACTIC_EQ;
       return r;
     }
@@ -132,8 +132,8 @@ Results verify(llvm::Function &F1, llvm::Function &F2,
   r.t.preprocess();
   TransformVerify verifier(r.t, false);
 
-  if (print_transform)
-    r.t.print(*out, {});
+  //if (print_transform)
+    //r.t.print(*out, {});
 
   {
     auto types = verifier.getTypings();
@@ -166,6 +166,16 @@ unsigned long long tot_num_errors=0;
 bool compareFunctions(llvm::Function &F1, llvm::Function &F2,
                       llvm::TargetLibraryInfoWrapperPass &TLI) {
   auto r = verify(F1, F2, TLI, !opt_quiet, opt_always_verify);
+  switch(r.status){
+    case Results::ERROR:
+    case Results::UNSOUND:
+    case Results::TYPE_CHECKER_FAILED:
+    case Results::FAILED_TO_PROVE:
+    *out<<"Source file:"<<F1.getParent()->getSourceFileName()<<"\n";
+    r.t.print(*out, {});
+    default:
+      break;
+  }
   if (r.status == Results::ERROR) {
     *out << "ERROR: " << r.error;
 
@@ -178,12 +188,12 @@ bool compareFunctions(llvm::Function &F1, llvm::Function &F2,
     break;
 
   case Results::SYNTACTIC_EQ:
-    *out << "Transformation seems to be correct! (syntactically equal)\n\n";
+    //*out << "Transformation seems to be correct! (syntactically equal)\n\n";
     ++num_correct;
     break;
 
   case Results::CORRECT:
-    *out << "Transformation seems to be correct!\n\n";
+    //*out << "Transformation seems to be correct!\n\n";
     ++num_correct;
     break;
 
@@ -230,7 +240,7 @@ void optimizeModule(llvm::Module *M) {
 }
 
 int logIndex;
-void copyMode(),timeMode(),loggerInit(llvm::Module* pm),init(),runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator);
+void copyMode(),timeMode(),loggerInit(llvm::Module* pm),init(),runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator),programEnd();
 bool isValidInputPath(),isValidOutputPath();
 string getOutputFile(int ith,bool isOptimized=false);
 
@@ -269,15 +279,7 @@ version )EOF";
   }else if(timeElapsed>0){
     timeMode();
   }
-  if(verbose){
-  std::cout<<"program ended\n";
- 
-  std::cout << "Summary:\n"
-        "  " << tot_num_correct << " correct transformations\n"
-        "  " << tot_num_unsound << " incorrect transformations\n"
-        "  " << tot_num_failed  << " failed-to-prove transformations\n"
-        "  " << tot_num_errors << " Alive2 errors\n";
-  }
+  programEnd();
   return num_errors > 0;
 }
 
@@ -306,6 +308,24 @@ void init(){
 }
 
 /*
+  output summary
+  delete last log file
+*/
+void programEnd(){
+  std::cout<<"program ended\n";
+ 
+  std::cout << "Summary:\n"
+        "  " << tot_num_correct << " correct transformations\n"
+        "  " << tot_num_unsound << " incorrect transformations\n"
+        "  " << tot_num_failed  << " failed-to-prove transformations\n"
+        "  " << tot_num_errors << " Alive2 errors\n";
+
+  fs::path fname = testfile+"-log"+to_string(logIndex)+".txt";
+  fs::path path = fs::path(outputFolder.getValue()) / fname.filename();
+  fs::remove(path);
+}
+
+/*
  * Set Alive2's log path. if verbose flag is used, it could output to /def/null or stdout. 
  * Otherwise it will output to file if find a value mismatch
 */
@@ -315,10 +335,13 @@ void loggerInit(llvm::Module* pm){
       out=&nout;
       //out=&cout;
   }else{
-      auto &source_file = pm->getSourceFileName();
-      fs::path fname = "log"+to_string(logIndex)+".txt";
+      //auto &source_file = pm->getSourceFileName();
+      fs::path fname = testfile+"-log"+to_string(logIndex)+".txt";
       fs::path path = fs::path(outputFolder.getValue()) / fname.filename();
-      if(out_file.is_open())out_file.close();
+      if(out_file.is_open()){
+        out_file.flush();
+        out_file.close();
+      }
       out_file.open(path);
       out = &out_file;
       if (!out_file.is_open()) {
@@ -327,7 +350,7 @@ void loggerInit(llvm::Module* pm){
       }
 
       report_filename = path;
-      *out << "Source: " << source_file << endl;
+      //*out << "Source: " << source_file << endl;
       report_dir_created = true;
 
       if (opt_smt_log) {
