@@ -86,7 +86,6 @@ Please contact us or submit a PR if something is missing or inaccurate.
 79. CVP: incorrect transformation of abs (https://llvm.org/PR59887)
 80. InstCombine generates incorrect range metadata for ctpop (https://llvm.org/PR59888)
 
-
 ### Bugs found in Z3
 1. Incorrect bitblast for fprem (https://github.com/Z3Prover/z3/issues/2369)
 2. Bug in FPA w/ quantifiers (https://github.com/Z3Prover/z3/issues/2596)
