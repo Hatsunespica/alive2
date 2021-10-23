@@ -65,6 +65,7 @@ Please contact us or submit a PR if something is missing or inaccurate.
 58. MergeICmps reorders comparisons and introduces UB (https://llvm.org/PR51845)
 59. Sink: moves calls that may not return (https://llvm.org/PR51846)
 60. LIVM introduces load in writeonly function (https://llvm.org/PR51906)
+61. InstCombine: 2 related logic bugs from over-generalizing "lshr" to "any shr" (https://llvm.org/PR51351)
 
 
 ### Bugs found in Z3
