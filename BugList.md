@@ -87,7 +87,6 @@ Please contact us or submit a PR if something is missing or inaccurate.
 80. InstCombine generates incorrect range metadata for ctpop (https://llvm.org/PR59888)
 81. InstCombine introduces UB when moving rem instructions (https://llvm.org/PR60906)
 
-
 ### Bugs found in Z3
 1. Incorrect bitblast for fprem (https://github.com/Z3Prover/z3/issues/2369)
 2. Bug in FPA w/ quantifiers (https://github.com/Z3Prover/z3/issues/2596)
