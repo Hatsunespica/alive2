@@ -66,6 +66,7 @@ Please contact us or submit a PR if something is missing or inaccurate.
 59. Sink: moves calls that may not return (https://llvm.org/PR51846)
 60. LIVM introduces load in writeonly function (https://llvm.org/PR51906)
 61. InstCombine: 2 related logic bugs from over-generalizing "lshr" to "any shr" (https://llvm.org/PR51351)
+62. Inbounds: might cause problem in signed GEP instruction (https://bugs.llvm.org/show_bug.cgi?id=52429)
 
 
 ### Bugs found in Z3
