@@ -8,6 +8,9 @@ bool ComplexMutator::init(){
                 break;
             }
         }
+        if(!funcIt->isDeclaration()&&!funcIt->getName().empty()){
+            dtMap[funcIt->getName()]=llvm::DominatorTree(*funcIt);
+        }
     }
 
     bool result=false;
@@ -32,16 +35,51 @@ end:
     return result;
 }
 
+void ComplexMutator::resetTmpModule(){
+    vMap.clear();
+    tmpCopy=llvm::CloneModule(*pm,vMap);
+    tmpFit=llvm::Module::iterator((llvm::Function*)&*vMap[&*fit]);
+    tmpBit=llvm::Function::iterator((llvm::BasicBlock*)&*vMap[&*bit]);
+    tmpIit=llvm::BasicBlock::iterator((llvm::Instruction*)&*vMap[&*iit]);
+}
+
 void ComplexMutator::mutateModule(const std::string& outputFileName){
-    restoreBackUp();
-    for(auto it=iit->op_begin();it!=iit->op_end();++it){
-        instArgs.push_back(it->get());
+    resetTmpModule();    
+    if(debug){
+        llvm::errs()<<"Current function "<<tmpFit->getName()<<"\n";
+        llvm::errs()<<"Current basic block:\n";
+        tmpBit->print(llvm::errs());
+        llvm::errs()<<"\nCurrent instruction:\n";
+        tmpIit->print(llvm::errs());
+        llvm::errs()<<"\n";
+
+    }
+    currFuncName=tmpFit->getName().str();
+    bool newAdded=false;
+    //75% chances to add a new inst, 25% chances to replace with a existent usage
+    if((Random::getRandomUnsigned()&3)!=0){
+        insertRandomBinaryInstruction(&*tmpIit);
+        newAdded=true;
+    }else{
+        replaceRandomUsage(&*tmpIit);
     }
     if(debug){
-        iit->print(llvm::errs());
+        if(!newAdded){
+            llvm::errs()<<"\nReplaced with a existant usage\n";
+        }else{
+            llvm::errs()<<"\nNew Inst added\n";
+        }
+        tmpBit->print(llvm::errs());
+        llvm::errs()<<"\nDT info"<<dtMap.find(fit->getName())->second.dominates(&*(fit->getFunction().begin()->begin()),&*iit);
+        llvm::errs()<<"\n";
+        /*std::error_code ec;
+        llvm::raw_fd_ostream fout(outputFileName,ec);
+        fout<<*tmpCopy;
+        fout.close();
+        llvm::errs()<<"file wrote to "<<outputFileName<<"\n";*/
     }
-    updatedInst=&*iit;
-    currFuncName=fit->getName().str();
+    moveToNextReplaceableInst();
+    /*
     //75% chances to add a new inst, 25% chances to replace with a existent usage
     //if(false){
     if((Random::getRandomUnsigned()&3)!=0){
@@ -56,7 +94,7 @@ void ComplexMutator::mutateModule(const std::string& outputFileName){
             llvm::errs()<<"\nNew Inst added\n";
         }
         bit->print(llvm::errs());
-        llvm::errs()<<"\nDT info"<<DT.dominates(&*(fit->getFunction().begin()->begin()),updatedInst);
+        llvm::errs()<<"\nDT info"<<dtMap.find(fit->getName())->second.dominates(&*(fit->getFunction().begin()->begin()),updatedInst);
         llvm::errs()<<"\n";
         std::error_code ec;
         llvm::raw_fd_ostream fout(outputFileName,ec);
@@ -67,33 +105,15 @@ void ComplexMutator::mutateModule(const std::string& outputFileName){
     moveToNextReplaceableInst();
     while(!newAdded.empty()&&newAdded.back()==&*iit)
         moveToNextReplaceableInst();
+    */
 }
 
 void ComplexMutator::saveModule(const std::string& outputFileName){
     std::error_code ec;
     llvm::raw_fd_ostream fout(outputFileName,ec);
-    fout<<*pm;
+    fout<<*tmpCopy;
     fout.close();
     llvm::errs()<<"file wrote to "<<outputFileName<<"\n";
-}
-
-void ComplexMutator::restoreBackUp(){
-    if(updatedInst!=nullptr){
-        llvm::Instruction* newInst=&*iit;
-        for(size_t i=0;i<instArgs.size();++i){
-            updatedInst->setOperand(i,instArgs[i]);
-        }
-        for(auto inst:newAdded){
-            inst->eraseFromParent();
-            if(auto it=std::find(domInst.begin(),domInst.end(),inst);it!=domInst.end()){
-                domInst.erase(it);
-            }
-        }
-        instArgs.clear();
-        newAdded.clear();
-        updatedInst=nullptr;
-        iit=decltype(bit->begin())(newInst);
-    }
 }
 
 bool ComplexMutator::isReplaceable(llvm::Instruction* inst){
@@ -128,7 +148,6 @@ void ComplexMutator::moveToNextFuction(){
     while(fit->isDeclaration()){
         ++fit;if(fit==pm->end())fit=pm->begin();
     }
-    DT=llvm::DominatorTree(*fit);
     bit=fit->begin();
     iit=bit->begin();
 }
@@ -144,9 +163,7 @@ void ComplexMutator::moveToNextBasicBlock(){
 }
 
 void ComplexMutator::moveToNextInst(){
-    if(std::find(newAdded.begin(),newAdded.end(),&*iit)==newAdded.end()){
-        domInst.push_back(&*iit);
-    }
+    domInst.push_back(&*iit);
     ++iit;
     if(iit==bit->end()){
         moveToNextBasicBlock();
@@ -161,18 +178,19 @@ void ComplexMutator::moveToNextReplaceableInst(){
 
 void ComplexMutator::calcDomInst(){
     domInst.clear();
-    DT=llvm::DominatorTree(*fit);
-    for(auto bitTmp=bit->getParent()->begin();bitTmp!=bit;++bitTmp){
-        for(auto iitTmp=bitTmp->begin();iitTmp!=bitTmp->end();++iitTmp){
-            if(DT.dominates(&*iitTmp,&*iit)){
-
-                domInst.push_back(&*iitTmp);
+    if(auto it=dtMap.find(fit->getName());it!=dtMap.end()){
+        llvm::DominatorTree& DT=it->second;
+        for(auto bitTmp=fit->begin();bitTmp!=bit;++bitTmp){
+            if(DT.dominates(&*bitTmp,&*bit)){
+                for(auto iitTmp=bitTmp->begin();iitTmp!=bitTmp->end();++iitTmp){
+                        domInst.push_back(&*iitTmp);
+                }
             }
         }
-    }
-    for(auto iitTmp=bit->begin();iitTmp!=iit;++iitTmp){
-        if(DT.dominates(&*iitTmp,&*iit)){
-            domInst.push_back(&*iitTmp);
+        for(auto iitTmp=bit->begin();iitTmp!=iit;++iitTmp){
+            if(DT.dominates(&*iitTmp,&*iit)){
+                domInst.push_back(&*iitTmp);
+            }
         }
     }
 }
@@ -240,7 +258,7 @@ llvm::Value* ComplexMutator::getRandomValue(llvm::Type* ty){
         for(size_t i=0,pos=Random::getRandomUnsigned()%domInst.size();i<domInst.size();++i,++pos){
             if(pos==domInst.size())pos=0;
             if(domInst[pos]->getType()==ty){
-                return domInst[pos];
+                return &*vMap[domInst[pos]];
             }
         }
     }
