@@ -77,7 +77,6 @@ end:
         for(size_t i=0;i<helpers.size();++i){
             helpers[i]->init();
         }
-        currHelpersIt=helpers.begin();
     }
 
     return result;
@@ -103,21 +102,20 @@ void ComplexMutator::mutateModule(const std::string& outputFileName){
 
     }
     currFuncName=tmpFit->getName().str();
-    if((*currHelpersIt)->shouldMutate()){
-        (*currHelpersIt)->mutate();
+    for(size_t idx=0;idx<helpers.size();++idx){
+        while(helpers[idx]->shouldMutate()&&Random::getRandomBool()){
+            helpers[idx]->mutate();
+            if(debug){
+                helpers[idx]->debug();
+            }
+        }
     }
     if(debug){
-        (*currHelpersIt)->debug();
         tmpBit->print(llvm::errs());
         llvm::errs()<<"\nDT info"<<dtMap.find(fit->getName())->second.dominates(&*(fit->getFunction().begin()->begin()),&*iit);
         llvm::errs()<<"\n";
     }
-    while(currHelpersIt!=helpers.end()&&!(*currHelpersIt)->shouldMutate()){
-        ++currHelpersIt;
-    }
-    if(currHelpersIt==helpers.end()){
-        moveToNextReplaceableInst();
-    }
+    moveToNextReplaceableInst();
 }
 
 void ComplexMutator::saveModule(const std::string& outputFileName){
@@ -197,7 +195,6 @@ void ComplexMutator::moveToNextReplaceableInst(){
     for(size_t i:whenMoveToNextInstFuncs){
         helpers[i]->whenMoveToNextInst();
     }
-    currHelpersIt=helpers.begin();
 }
 
 
