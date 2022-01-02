@@ -195,10 +195,12 @@ void ComplexMutator::moveToNextReplaceableInst(){
     for(size_t i:whenMoveToNextInstFuncs){
         helpers[i]->whenMoveToNextInst();
     }
+    domInst.restoreBackup();
 }
 
 
 void ComplexMutator::calcDomInst(){
+    domInst.deleteBackup();
     domInst.resize(pm->global_size());
     if(auto it=dtMap.find(fit->getName());it!=dtMap.end()){
         //add Parameters
@@ -214,6 +216,7 @@ void ComplexMutator::calcDomInst(){
                 }
             }
         }
+        domInst.startBackup();
         //add Instructions before iitTmp
         for(auto iitTmp=bit->begin();iitTmp!=iit;++iitTmp){
             if(DT.dominates(&*iitTmp,&*iit)){
