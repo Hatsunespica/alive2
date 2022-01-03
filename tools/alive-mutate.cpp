@@ -348,7 +348,7 @@ version )EOF";
     }
   }
   if(verbose){
-    cerr<<"Current seed"<<Random::getSeed<<"\n";
+    cerr<<"Current seed"<<Random::getSeed()<<"\n";
   }
   if(numCopy>0){
     copyMode();
@@ -532,6 +532,11 @@ void runOnce(int ith,llvm::LLVMContext& context,Mutator& mutator){
     bool shouldLog=false;
     if(llvm::Function* pf1=M1->getFunction(optFunc);pf1!=nullptr){
       if(!pf1->isDeclaration()){
+        /*if(llvm::verifyFunction(*pf1,&llvm::errs())){
+          pf1->print(llvm::errs());
+          llvm::errs()<<"current seed "<<Random::getSeed()<<"\n";
+          assert(!llvm::verifyFunction(*pf1));
+        }*/
         llvm::ValueToValueMapTy vMap;
         llvm::Function* pf2=llvm::CloneFunction(pf1,vMap);
         LLVMUtil::optimizeFunction(pf2);
