@@ -6,6 +6,135 @@
 #include "simpleMutator.h"
 #include "ComplexMutatorHelper.h"
 
+
+/*
+  This is a class for holding dominated value with a backup function.
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-G(rear)
+  all operations on rear can be restored by a 'backup' operation
+
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-G(rear)
+
+  (update on rear)
+
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-H(rear)
+
+  (restore)
+
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-G(rear)
+*/
+class DominatedValueVector{
+  std::vector<llvm::Value*> domInst,backup,rear;
+  bool hasBackup;
+public:
+  DominatedValueVector():hasBackup(false){};
+  ~DominatedValueVector(){domInst.clear();backup.clear();rear.clear();}
+  llvm::Value*& operator[](size_t idx){
+    if(idx<domInst.size()){
+      return domInst[idx];
+    }else{
+      return rear[idx-domInst.size()];
+    }
+  }
+
+  void push_back_tmp(llvm::Value* val){
+    if(hasBackup){
+      rear.push_back(val);
+    }else{
+      domInst.push_back(val);
+    }
+  }
+
+  void pop_back_tmp(){
+    if(hasBackup){
+      rear.pop_back();
+    }else{
+      domInst.pop_back();
+    }
+  }
+
+  void push_back(llvm::Value* val){
+    if(hasBackup){
+      backup.push_back(val);
+      rear.push_back(val);
+    }else{
+      domInst.push_back(val);
+    }
+  }
+
+  void pop_back(){
+    if(hasBackup){
+      backup.pop_back();
+      rear.pop_back();
+    }else{
+      domInst.pop_back();
+    }
+  }
+
+  void startBackup(){hasBackup=true;}
+
+  /**
+   * rear would be clear.
+   * all elements in backup would be push_back to domInst and backup clear;
+   */
+  void deleteBackup(){
+    hasBackup=false;
+    while(!backup.empty()){
+      domInst.push_back(backup.back());
+      backup.pop_back();
+    }
+    rear.clear();
+  }
+
+  void restoreBackup(){
+    if(hasBackup){
+      rear=backup;
+    }
+  }
+
+  void clear(){
+    hasBackup=false;
+    domInst.clear();rear.clear();backup.clear();
+  }
+
+  void resize(size_t sz){
+    if(hasBackup){
+      if(sz<=domInst.size()){
+        deleteBackup();
+        domInst.resize(sz);
+      }else{
+        rear.resize(sz-domInst.size());
+        backup.resize(sz-domInst.size());
+      }
+    }else{
+      domInst.resize(sz);
+    }
+  }
+
+  llvm::Value*& back(){
+    return rear.empty()?domInst.back():rear.back();
+  }
+  bool inBackup()const{return hasBackup;}
+  size_t size()const{return domInst.size()+rear.size();}
+  size_t tmp_size()const{return rear.size();}
+  size_t empty()const{return domInst.empty()&&(!hasBackup||rear.empty());}
+  int find(llvm::Value* val)const{
+    for(size_t i=0;i<domInst.size();++i)
+    if(val==domInst[i])return i;
+    if(hasBackup){
+      for(size_t i=0;i<rear.size();++i)
+      if(val==rear[i])return i+domInst.size();
+    }
+    return -1;
+  }
+};
 /*
   This class is used for doing complex mutations on a given file.
   Current supported operation: 
@@ -22,7 +151,11 @@ class ComplexMutator:public Mutator{
 
 
     std::unordered_set<std::string> invalidFunctions;
-    std::vector<llvm::Value*> domInst;
+    /**
+     * 1. time point of starting and deleting backup.
+     * 2. update those class updates domInst
+     */
+    DominatedValueVector domInst;
 
     //some functions contain 'immarg' in their arguments. Skip those function calls.
     std::unordered_set<std::string> filterSet;
@@ -46,16 +179,16 @@ class ComplexMutator:public Mutator{
     llvm::SmallVector<llvm::Instruction*> lazyUpdateInsts;
     llvm::SmallVector<size_t> lazyUpdateArgPos;
     llvm::SmallVector<llvm::Type*> lazyUpdateArgTys;
-    llvm::SmallVector<llvm::Value*> extraFuncArgs;
+    llvm::SmallVector<llvm::Value*> extraValue;
     void addFunctionArguments(const llvm::SmallVector<llvm::Type*>& tys);
     llvm::Value* getRandomConstant(llvm::Type* ty);
     llvm::Value* getRandomDominatedValue(llvm::Type* ty);
-    llvm::Value* getRandomValueFromExtraFuncArgs(llvm::Type* ty);
+    llvm::Value* getRandomValueFromExtraValue(llvm::Type* ty);
     llvm::Value* getRandomPointerValue(llvm::Type* ty);
     llvm::SmallVector<llvm::Value* (ComplexMutator::*)(llvm::Type*)> valueFuncs;
 
-    llvm::SmallVector<std::unique_ptr<ComplexMutatorHelper>>::iterator currHelpersIt;
     llvm::SmallVector<std::unique_ptr<ComplexMutatorHelper>> helpers;
+    llvm::SmallVector<int> helpersPossbility;
     llvm::SmallVector<size_t> whenMoveToNextInstFuncs;
     llvm::SmallVector<size_t> whenMoveToNextBasicBlockFuncs;
     llvm::SmallVector<size_t> whenMoveToNextFuncFuncs;
@@ -64,14 +197,14 @@ class ComplexMutator:public Mutator{
     void fixAllValues();
 public:
     ComplexMutator(bool debug=false):Mutator(debug),tmpCopy(nullptr),
-      valueFuncs({&ComplexMutator::getRandomConstant,&ComplexMutator::getRandomDominatedValue,&ComplexMutator::getRandomValueFromExtraFuncArgs}){
+      valueFuncs({&ComplexMutator::getRandomConstant,&ComplexMutator::getRandomDominatedValue,&ComplexMutator::getRandomValueFromExtraValue}){
     };
     ComplexMutator(std::unique_ptr<llvm::Module> pm_,const std::unordered_set<std::string>& invalidFunctions,bool debug=false):Mutator(debug),invalidFunctions(invalidFunctions),tmpCopy(nullptr),
-      valueFuncs({&ComplexMutator::getRandomConstant,&ComplexMutator::getRandomDominatedValue,&ComplexMutator::getRandomValueFromExtraFuncArgs}){
+      valueFuncs({&ComplexMutator::getRandomConstant,&ComplexMutator::getRandomDominatedValue,&ComplexMutator::getRandomValueFromExtraValue}){
       pm=std::move(pm_);
     };
     ComplexMutator(std::unique_ptr<llvm::Module> pm_,bool debug=false):Mutator(debug),tmpCopy(nullptr),
-      valueFuncs({&ComplexMutator::getRandomConstant,&ComplexMutator::getRandomDominatedValue,&ComplexMutator::getRandomValueFromExtraFuncArgs}){
+      valueFuncs({&ComplexMutator::getRandomConstant,&ComplexMutator::getRandomDominatedValue,&ComplexMutator::getRandomValueFromExtraValue}){
       pm=std::move(pm_);
     }
     ~ComplexMutator(){};

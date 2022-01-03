@@ -82,10 +82,39 @@ void ShuffleHelper::shuffleBlock(){
     for(const auto& p:sblock){
         sv.push_back(p);
     }
+    int idx=mutator->domInst.find(sv[0]);
     llvm::Instruction* nextInst=(llvm::Instruction*)&*(mutator->vMap)[&*(++sv.back()->getIterator())];
+    int findInSV=-1;
+    for(int i=0;i<(int)sv.size();++i){
+        if(sv[i]->getIterator()==mutator->iit){
+            findInSV=i;
+            break;
+        }
+    }
     while(sv==sblock){
         std::random_shuffle(sv.begin(),sv.end());
     }
+
+    /**
+     * 2 situations here.
+     * the first is current iit is not in shuffle interval. Then shuffle interval is either totally in domInst or totally not in domInst.
+     * the second is current it is in shuffle interval. Then end of domInst must be pop first and then insert those dom-ed insts.
+     */
+    if(findInSV==-1){
+        if(idx!=-1){
+            for(size_t i=0;i+idx<mutator->domInst.size()&&i<sv.size();++i){
+                mutator->domInst[i+idx]=sv[i];
+            }
+        }
+    }else{
+        while(findInSV--){
+            mutator->domInst.pop_back_tmp();
+        }
+        for(size_t i=0;i<sv.size()&&sv[i]->getIterator()!=mutator->iit;++i){
+            mutator->domInst.push_back_tmp(sv[i]);
+        }
+    }
+
     for(llvm::Instruction* p:sv){
         ((llvm::Instruction*)&*(mutator->vMap)[p])->removeFromParent();
     }
@@ -93,6 +122,7 @@ void ShuffleHelper::shuffleBlock(){
     for(llvm::Instruction* p:sv){
         ((llvm::Instruction*)&*(mutator->vMap)[p])->insertBefore(nextInst);
     }
+    mutator->tmpIit=llvm::BasicBlock::iterator((llvm::Instruction*)&*mutator->vMap[&*mutator->iit]);
 }
 
 void MutateInstructionHelper::mutate(){
@@ -162,14 +192,15 @@ bool RandomMoveHelper::shouldMutate(){
 
 void RandomMoveHelper::mutate(){
     randomMoveInstruction(&*(mutator->tmpIit));
-    mutator->extraFuncArgs.clear();
+    moved=true;
+    mutator->extraValue.clear();
 }
 
 void RandomMoveHelper::randomMoveInstruction(llvm::Instruction* inst){
     if(inst->getNextNonDebugInstruction()->isTerminator()){
     //if(Random::getRandomBool()){
         randomMoveInstructionForward(inst);
-    }else if(inst==&*(inst->getParent()->begin())){
+    }else if(inst->getIterator()==(inst->getParent()->begin())){
         randomMoveInstructionBackward(inst);
     }else{
         if(Random::getRandomBool()){
@@ -182,7 +213,6 @@ void RandomMoveHelper::randomMoveInstruction(llvm::Instruction* inst){
 
 void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction* inst){
     size_t pos=0,newPos,beginPos=0;
-
     for(auto it=inst->getParent()->begin();&*it!=inst;++it,++pos);
     /**
      * PHINode must be the first inst in the basic block.
@@ -193,7 +223,6 @@ void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction* inst){
             ++beginPos;
         }
     }
-
     /*
      *  Current inst cannot move forward because current inst is not PHI inst,
      *  and there are zero or more PHI inst(s) in front of current inst.
@@ -206,15 +235,14 @@ void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction* inst){
     //llvm::errs()<<pos<<' '<<beginPos<<' '<<newPos<<"AAAAAAAAAAAAAA\n";
     //llvm::errs()<<"both pos: "<<pos<<' '<<newPos<<"\n";
     llvm::SmallVector<llvm::Instruction*> v;
-    llvm::SmallVector<llvm::Value*> domBackup;
     llvm::Instruction* newPosInst=inst;
     llvm::BasicBlock::iterator newPosIt=newPosInst->getIterator();
     for(size_t i=pos;i!=newPos;--i){
         --newPosIt;
         v.push_back(&*newPosIt);
         //remove Insts in current basic block
-        domBackup.push_back(mutator->domInst.back());
-        mutator->domInst.pop_back();
+        assert(mutator->domInst.tmp_size()!=0);
+        mutator->domInst.pop_back_tmp();
     }
     newPosInst=&*newPosIt;
 
@@ -223,16 +251,10 @@ void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction* inst){
             mutator->setOperandRandomValue(inst,i);
         }
     }
-
     inst->moveBefore(newPosInst);
 
     mutator->fixAllValues();
-
     //restore domInst
-    while(!domBackup.empty()){
-        mutator->domInst.push_back(domBackup.back());
-        domBackup.pop_back();
-    }
 }
 
 void RandomMoveHelper::randomMoveInstructionBackward(llvm::Instruction* inst){
@@ -258,13 +280,16 @@ void RandomMoveHelper::randomMoveInstructionBackward(llvm::Instruction* inst){
 
     //need fix all insts used current inst in [pos,newPos]
     llvm::Instruction* newPosInst=inst;
+    llvm::BasicBlock::iterator newPosIt=newPosInst->getIterator();
     for(size_t i=pos;i!=newPos;++i){
-        newPosInst=inst->getNextNonDebugInstruction();
+        ++newPosIt;
+        newPosInst=&*newPosIt;
         for(size_t op=0;op<newPosInst->getNumOperands();++op){
             if(llvm::Value* opP=newPosInst->getOperand(op);opP!=nullptr&&opP==inst){
                 mutator->setOperandRandomValue(newPosInst,op);
             }
         }
+        mutator->extraValue.push_back(newPosInst);
     }
 
     inst->moveBefore(newPosInst);
