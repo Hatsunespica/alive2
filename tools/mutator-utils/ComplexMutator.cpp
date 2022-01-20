@@ -131,7 +131,9 @@ void ComplexMutator::saveModule(const std::string &outputFileName) {
   llvm::raw_fd_ostream fout(outputFileName, ec);
   fout << *tmpCopy;
   fout.close();
-  llvm::errs() << "file wrote to " << outputFileName << "\n";
+  if(debug){
+    llvm::errs() << "file wrote to " << outputFileName << "\n";
+  }
 }
 
 bool ComplexMutator::isReplaceable(llvm::Instruction *inst) {
