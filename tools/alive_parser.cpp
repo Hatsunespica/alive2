@@ -27,7 +27,7 @@ static_assert(LEXER_READ_AHEAD == PARSER_READ_AHEAD);
 namespace tools {
 
 static void error(string &&s) {
-  throw ParseException(move(s), yylineno);
+  throw ParseException(std::move(s), yylineno);
 }
 
 static void error(const char *s, token t) {
@@ -50,14 +50,14 @@ static Value& parse_operand(Type &type);
 static Value& get_constant(uint64_t n, Type &t) {
   auto c = make_unique<IntConst>(t, n);
   auto ret = c.get();
-  fn->addConstant(move(c));
+  fn->addConstant(std::move(c));
   return *ret;
 }
 
 static Value& get_num_constant(string_view n, Type &t) {
   auto c = make_unique<IntConst>(t, string(n));
   auto ret = c.get();
-  fn->addConstant(move(c));
+  fn->addConstant(std::move(c));
   return *ret;
 }
 
@@ -69,15 +69,15 @@ static Value& get_constant(string_view name, Type &type) {
 
   auto c = make_unique<ConstantInput>(type, string(id));
   auto ret = c.get();
-  fn->addInput(move(c));
-  identifiers.emplace(move(id), ret);
+  fn->addInput(std::move(c));
+  identifiers.emplace(std::move(id), ret);
   return *ret;
 }
 
 static Value& get_fp_constant(string_view n, Type &t) {
   auto c = make_unique<FloatConst>(t, string(n), false);
   auto ret = c.get();
-  fn->addConstant(move(c));
+  fn->addConstant(std::move(c));
   return *ret;
 }
 
@@ -158,7 +158,7 @@ private:
 #endif
       return t;
     } catch (LexException &e) {
-      throw ParseException(move(e.str), e.lineno);
+      throw ParseException(std::move(e.str), e.lineno);
     }
   }
 };
@@ -200,7 +200,7 @@ parse_more:
     if (last_t == BAND) {
       auto p = make_unique<BoolPred>(*last, *newpred, BoolPred::AND);
       newpred = p.get();
-      fn->addPredicate(move(p));
+      fn->addPredicate(std::move(p));
       goto parse_more;
     }
 
@@ -211,14 +211,14 @@ parse_more:
       newpred = parse_predicate(newpred, BAND);
       auto p = make_unique<BoolPred>(*last, *newpred, BoolPred::OR);
       auto ret = p.get();
-      fn->addPredicate(move(p));
+      fn->addPredicate(std::move(p));
       return ret;
     }
 
     case BOR: {
       auto p = make_unique<BoolPred>(*last, *newpred, BoolPred::OR);
       auto ret = p.get();
-      fn->addPredicate(move(p));
+      fn->addPredicate(std::move(p));
       return parse_predicate(ret, BOR);
     }
 
@@ -228,7 +228,7 @@ parse_more:
                                      last_t == BAND ? BoolPred::AND :
                                                       BoolPred::OR);
       auto ret = p.get();
-      fn->addPredicate(move(p));
+      fn->addPredicate(std::move(p));
       return ret;
     }
     }
@@ -247,9 +247,9 @@ parse_more:
     }
     tokenizer.ensure(RPAREN);
 
-    auto p = make_unique<FnPred>(name, move(args));
+    auto p = make_unique<FnPred>(name, std::move(args));
     auto ret = p.get();
-    fn->addPredicate(move(p));
+    fn->addPredicate(std::move(p));
     return ret;
   }
   case CONSTANT:
@@ -419,7 +419,7 @@ static Type& parse_struct_type() {
 end:
   return *struct_types.emplace_back(
     make_unique<StructType>("sty_" + to_string(struct_types.size()),
-                            move(tys), move(padding))).get();
+                            std::move(tys), std::move(padding))).get();
 }
 
 static Type& try_parse_type(Type &default_type) {
@@ -448,12 +448,12 @@ static Value& parse_const_expr(Type &type) {
       tokenizer.ensure(RPAREN);
     }
     try {
-      auto f = make_unique<ConstantFn>(type, name, move(args));
+      auto f = make_unique<ConstantFn>(type, name, std::move(args));
       auto ret = f.get();
-      fn->addConstant(move(f));
+      fn->addConstant(std::move(f));
       return *ret;
     } catch (ConstantFnException &e) {
-      error(move(e.str));
+      error(std::move(e.str));
     }
   }
   default:
@@ -487,23 +487,23 @@ static Value& get_or_copy_instr(const string &name) {
     } else if (dynamic_cast<UndefValue*>(op)) {
       auto newop = make_unique<UndefValue>(op->getType());
       tgt_instr->rauw(*op, *newop.get());
-      fn->addUndef(move(newop));
+      fn->addUndef(std::move(newop));
     } else if (dynamic_cast<PoisonValue*>(op)) {
       auto newop = make_unique<PoisonValue>(op->getType());
       tgt_instr->rauw(*op, *newop.get());
-      fn->addConstant(move(newop));
+      fn->addConstant(std::move(newop));
     } else if (dynamic_cast<NullPointerValue*>(op)) {
       auto newop = make_unique<NullPointerValue>(op->getType());
       tgt_instr->rauw(*op, *newop.get());
-      fn->addConstant(move(newop));
+      fn->addConstant(std::move(newop));
     } else if (auto c = dynamic_cast<IntConst*>(op)) {
       auto newop = make_unique<IntConst>(*c);
       tgt_instr->rauw(*op, *newop.get());
-      fn->addConstant(move(newop));
+      fn->addConstant(std::move(newop));
     } else if (auto c = dynamic_cast<FloatConst*>(op)) {
       auto newop = make_unique<FloatConst>(*c);
       tgt_instr->rauw(*op, *newop.get());
-      fn->addConstant(move(newop));
+      fn->addConstant(std::move(newop));
     } else if (dynamic_cast<ConstantInput*>(op)) {
       assert(0 && "TODO");
     } else if (dynamic_cast<ConstantBinOp*>(op)) {
@@ -523,9 +523,9 @@ static Value& get_or_copy_instr(const string &name) {
   if (!bb->empty() &&
        (dynamic_cast<JumpInstr*>(&bb->back()) ||
         dynamic_cast<Return*>(&bb->back())))
-    bb->addInstrAt(move(tgt_instr), &bb->back(), true);
+    bb->addInstrAt(std::move(tgt_instr), &bb->back(), true);
   else
-    bb->addInstr(move(tgt_instr));
+    bb->addInstr(std::move(tgt_instr));
   return *ret;
 }
 
@@ -539,9 +539,9 @@ static Value& parse_aggregate_constant(Type &type, token close_tk) {
 
   tokenizer.ensure(close_tk);
 
-  auto c = make_unique<AggregateValue>(type, move(vals));
+  auto c = make_unique<AggregateValue>(type, std::move(vals));
   auto ret = c.get();
-  fn->addConstant(move(c));
+  fn->addConstant(std::move(c));
   return *ret;
 }
 
@@ -564,19 +564,19 @@ static Value& parse_operand(Type &type) {
   case UNDEF: {
     auto val = make_unique<UndefValue>(type);
     auto ret = val.get();
-    fn->addUndef(move(val));
+    fn->addUndef(std::move(val));
     return *ret;
   }
   case POISON: {
     auto val = make_unique<PoisonValue>(type);
     auto ret = val.get();
-    fn->addConstant(move(val));
+    fn->addConstant(std::move(val));
     return *ret;
   }
   case NULLTOKEN: {
     auto val = make_unique<NullPointerValue>(type);
     auto ret = val.get();
-    fn->addConstant(move(val));
+    fn->addConstant(std::move(val));
     return *ret;
   }
   case REGISTER: {
@@ -588,8 +588,8 @@ static Value& parse_operand(Type &type) {
     if (parse_src) {
       auto input = make_unique<Input>(type, string(id));
       auto ret = input.get();
-      fn->addInput(move(input));
-      identifiers.emplace(move(id), ret);
+      fn->addInput(std::move(input));
+      identifiers.emplace(std::move(id), ret);
       return *ret;
     }
     return get_or_copy_instr(id);
@@ -787,23 +787,35 @@ static unique_ptr<Instr> parse_fp_binop(string_view name, token op_token) {
 }
 
 static unique_ptr<Instr> parse_unaryop(string_view name, token op_token) {
-  auto fmath = parse_fast_math(op_token);
-
   UnaryOp::Op op;
   switch (op_token) {
   case BITREVERSE: op = UnaryOp::BitReverse; break;
   case BSWAP:      op = UnaryOp::BSwap; break;
   case CTPOP:      op = UnaryOp::Ctpop; break;
-  case FNEG:       op = UnaryOp::FNeg; break;
   case FFS:        op = UnaryOp::FFS; break;
-  case FABS:       op = UnaryOp::FAbs; break;
   default:
     UNREACHABLE();
   }
 
   auto &ty = parse_type();
   auto &a = parse_operand(ty);
-  return make_unique<UnaryOp>(ty, string(name), a, op, fmath);
+  return make_unique<UnaryOp>(ty, string(name), a, op);
+}
+
+static unique_ptr<Instr> parse_fp_unaryop(string_view name, token op_token) {
+  auto fmath = parse_fast_math(op_token);
+
+  FpUnaryOp::Op op;
+  switch (op_token) {
+  case FABS: op = FpUnaryOp::FAbs; break;
+  case FNEG: op = FpUnaryOp::FNeg; break;
+  default:
+    UNREACHABLE();
+  }
+
+  auto &ty = parse_type();
+  auto &a = parse_operand(ty);
+  return make_unique<FpUnaryOp>(ty, string(name), a, op, fmath);
 }
 
 static unique_ptr<Instr> parse_unary_reduction_op(string_view name,
@@ -831,13 +843,10 @@ static unique_ptr<Instr> parse_unary_reduction_op(string_view name,
 }
 
 static unique_ptr<Instr> parse_ternary(string_view name, token op_token) {
-  auto fmath = parse_fast_math(op_token);
-
   TernaryOp::Op op;
   switch (op_token) {
   case FSHL: op = TernaryOp::FShl; break;
   case FSHR: op = TernaryOp::FShr; break;
-  case FMA:  op = TernaryOp::FMA; break;
   default:
     UNREACHABLE();
   }
@@ -850,7 +859,28 @@ static unique_ptr<Instr> parse_ternary(string_view name, token op_token) {
   parse_comma();
   auto &cty = parse_type();
   auto &c = parse_operand(cty);
-  return make_unique<TernaryOp>(aty, string(name), a, b, c, op, fmath);
+  return make_unique<TernaryOp>(aty, string(name), a, b, c, op);
+}
+
+static unique_ptr<Instr> parse_fp_ternary(string_view name, token op_token) {
+  auto fmath = parse_fast_math(op_token);
+
+  FpTernaryOp::Op op;
+  switch (op_token) {
+  case FMA: op = FpTernaryOp::FMA; break;
+  default:
+    UNREACHABLE();
+  }
+
+  auto &aty = parse_type();
+  auto &a = parse_operand(aty);
+  parse_comma();
+  auto &bty = parse_type();
+  auto &b = parse_operand(bty);
+  parse_comma();
+  auto &cty = parse_type();
+  auto &c = parse_operand(cty);
+  return make_unique<FpTernaryOp>(aty, string(name), a, b, c, op, fmath);
 }
 
 static unique_ptr<Instr> parse_conversionop(string_view name, token op_token) {
@@ -865,17 +895,32 @@ static unique_ptr<Instr> parse_conversionop(string_view name, token op_token) {
   case SEXT:     op = ConversionOp::SExt; break;
   case ZEXT:     op = ConversionOp::ZExt; break;
   case TRUNC:    op = ConversionOp::Trunc; break;
-  case SITOFP:   op = ConversionOp::SIntToFP; break;
-  case UITOFP:   op = ConversionOp::UIntToFP; break;
-  case FPTOSI:   op = ConversionOp::FPToSInt; break;
-  case FPTOUI:   op = ConversionOp::FPToUInt; break;
-  case FPEXT:    op = ConversionOp::FPExt; break;
-  case FPTRUNC:  op = ConversionOp::FPTrunc; break;
   case PTRTOINT: op = ConversionOp::Ptr2Int; break;
   default:
     UNREACHABLE();
   }
   return make_unique<ConversionOp>(ty2, string(name), val, op);
+}
+
+static unique_ptr<Instr>
+parse_fp_conversionop(string_view name, token op_token) {
+  // op ty %op to ty2
+  auto &opty = parse_type();
+  auto &val = parse_operand(opty);
+  auto &ty2 = parse_type(/*optional=*/!tokenizer.consumeIf(TO));
+
+  FpConversionOp::Op op;
+  switch (op_token) {
+  case SITOFP:  op = FpConversionOp::SIntToFP; break;
+  case UITOFP:  op = FpConversionOp::UIntToFP; break;
+  case FPTOSI:  op = FpConversionOp::FPToSInt; break;
+  case FPTOUI:  op = FpConversionOp::FPToUInt; break;
+  case FPEXT:   op = FpConversionOp::FPExt; break;
+  case FPTRUNC: op = FpConversionOp::FPTrunc; break;
+  default:
+    UNREACHABLE();
+  }
+  return make_unique<FpConversionOp>(ty2, string(name), val, op);
 }
 
 static unique_ptr<Instr> parse_select(string_view name) {
@@ -1039,8 +1084,8 @@ static unique_ptr<Instr> parse_call(string_view name) {
     }
   }
 exit:
-  auto call = make_unique<FnCall>(ret_ty, string(name), move(fn_name),
-                                  move(attrs));
+  auto call = make_unique<FnCall>(ret_ty, string(name), std::move(fn_name),
+                                  std::move(attrs));
 
   for (auto arg : args) {
     call->addArg(*arg, ParamAttrs::None);
@@ -1054,7 +1099,7 @@ static unique_ptr<Instr> parse_malloc(string_view name) {
   auto &op = parse_operand(ty);
   // Malloc returns a pointer at address space 0
   Type &pointer_type = get_pointer_type(0);
-  return make_unique<Malloc>(pointer_type, string(name), op, false);
+  return make_unique<Malloc>(pointer_type, string(name), op, false, 0);
 }
 
 static unique_ptr<Instr> parse_extractelement(string_view name) {
@@ -1093,7 +1138,7 @@ static unique_ptr<Instr> parse_shufflevector(string_view name) {
     mask.push_back((unsigned)parse_number());
   }
   return make_unique<ShuffleVector>(get_sym_type(), string(name), a, b,
-                                    move(mask));
+                                    std::move(mask));
 }
 
 static unique_ptr<Instr> parse_copyop(string_view name, token t) {
@@ -1152,9 +1197,10 @@ static unique_ptr<Instr> parse_instr(string_view name) {
   case BSWAP:
   case CTPOP:
   case FFS:
+    return parse_unaryop(name, t);
   case FABS:
   case FNEG:
-    return parse_unaryop(name, t);
+    return parse_fp_unaryop(name, t);
   case REDUCE_ADD:
   case REDUCE_MUL:
   case REDUCE_AND:
@@ -1167,20 +1213,22 @@ static unique_ptr<Instr> parse_instr(string_view name) {
     return parse_unary_reduction_op(name, t);
   case FSHL:
   case FSHR:
-  case FMA:
     return parse_ternary(name, t);
+  case FMA:
+    return parse_fp_ternary(name, t);
   case BITCAST:
   case SEXT:
   case ZEXT:
   case TRUNC:
+  case PTRTOINT:
+    return parse_conversionop(name, t);
   case SITOFP:
   case UITOFP:
   case FPTOSI:
   case FPTOUI:
   case FPEXT:
   case FPTRUNC:
-  case PTRTOINT:
-    return parse_conversionop(name, t);
+    return parse_fp_conversionop(name, t);
   case SELECT:
     return parse_select(name);
   case EXTRACTVALUE:
@@ -1260,7 +1308,7 @@ static void parse_fn(Function &f) {
     case RETURN: {
       auto instr = parse_return();
       f.setType(instr->getType());
-      bb->addInstr(move(instr));
+      bb->addInstr(std::move(instr));
       has_return = true;
       break;
     }
@@ -1287,7 +1335,7 @@ static void parse_fn(Function &f) {
         if (!identifiers.emplace(name, i.get()).second)
           error("Duplicated assignment to " + string(name));
       }
-      bb->addInstr(move(i));
+      bb->addInstr(std::move(i));
       break;
     }
   }
@@ -1329,16 +1377,16 @@ vector<Transform> parse(string_view buf) {
       if (dynamic_cast<const Input*>(&val)) {
         auto input = make_unique<Input>(val.getType(), string(name));
         identifiers_tgt.emplace(name, input.get());
-        t.tgt.addInput(move(input));
+        t.tgt.addInput(std::move(input));
       } else {
         assert(dynamic_cast<const ConstantInput*>(&val));
         auto input = make_unique<ConstantInput>(val.getType(), string(name));
         identifiers_tgt.emplace(name, input.get());
-        t.tgt.addInput(move(input));
+        t.tgt.addInput(std::move(input));
       }
     }
-    identifiers_src = move(identifiers);
-    identifiers = move(identifiers_tgt);
+    identifiers_src = std::move(identifiers);
+    identifiers = std::move(identifiers_tgt);
 
     parse_src = false;
     parse_fn(t.tgt);

@@ -57,7 +57,7 @@ static expr simplify_const(expr &&e, const expr &input,
     cout << "\n[WARN] missing fold: " << e << "\n->\n" << e.simplify() << '\n';
   }
 #endif
-  return move(e);
+  return std::move(e);
 }
 
 static bool is_power2(const expr &e, unsigned &log) {
@@ -1047,16 +1047,14 @@ expr expr::fneg() const {
   return unop_fold(Z3_mk_fpa_neg);
 }
 
-expr expr::sqrt() const {
-  C();
-  auto rm = Z3_mk_fpa_round_nearest_ties_to_even(ctx());
-  return simplify_const(Z3_mk_fpa_sqrt(ctx(), rm, ast()), *this);
+expr expr::sqrt(const expr &rm) const {
+  C(rm);
+  return simplify_const(Z3_mk_fpa_sqrt(ctx(), rm(), ast()), *this);
 }
 
-expr expr::fma(const expr &a, const expr &b, const expr &c) {
-  C2(a, b, c);
-  auto rm = Z3_mk_fpa_round_nearest_ties_to_even(ctx());
-  return simplify_const(Z3_mk_fpa_fma(ctx(), rm, a(), b(), c()), a, b, c);
+expr expr::fma(const expr &a, const expr &b, const expr &c, const expr &rm) {
+  C2(a, b, c, rm);
+  return simplify_const(Z3_mk_fpa_fma(ctx(), rm(), a(), b(), c()), a, b, c);
 }
 
 expr expr::ceil() const {
@@ -1673,7 +1671,7 @@ expr expr::extract(unsigned high, unsigned low, unsigned depth) const {
             return arg;
 
           if (first)
-            extracted = move(arg);
+            extracted = std::move(arg);
           else if (!arg.eq(extracted))
             extracted = expr();
           first = false;
@@ -1723,36 +1721,32 @@ expr expr::BV2float(const expr &type) const {
   return simplify_const(Z3_mk_fpa_to_fp_bv(ctx(), ast(), type.sort()), *this);
 }
 
-expr expr::float2Float(const expr &type) const {
-  C(type);
-  auto rm = Z3_mk_fpa_round_nearest_ties_to_even(ctx());
-  return Z3_mk_fpa_to_fp_float(ctx(), rm, ast(), type.sort());
+expr expr::float2Float(const expr &type, const expr &rm) const {
+  C(type, rm);
+  return Z3_mk_fpa_to_fp_float(ctx(), rm(), ast(), type.sort());
 }
 
-expr expr::fp2sint(unsigned bits) const {
-  C();
-  auto rm = Z3_mk_fpa_rtz(ctx());
-  return simplify_const(Z3_mk_fpa_to_sbv(ctx(), rm, ast(), bits), *this);
+expr expr::fp2sint(unsigned bits, const expr &rm) const {
+  C(rm);
+  return simplify_const(Z3_mk_fpa_to_sbv(ctx(), rm(), ast(), bits), *this);
 }
 
-expr expr::fp2uint(unsigned bits) const {
-  C();
-  auto rm = Z3_mk_fpa_rtz(ctx());
-  return simplify_const(Z3_mk_fpa_to_ubv(ctx(), rm, ast(), bits), *this);
+expr expr::fp2uint(unsigned bits, const expr &rm) const {
+  C(rm);
+  return simplify_const(Z3_mk_fpa_to_ubv(ctx(), rm(), ast(), bits), *this);
 }
 
-expr expr::sint2fp(const expr &type) const {
-  C(type);
-  auto rm = Z3_mk_fpa_round_nearest_ties_to_even(ctx());
-  return simplify_const(Z3_mk_fpa_to_fp_signed(ctx(), rm, ast(), type.sort()),
+expr expr::sint2fp(const expr &type, const expr &rm) const {
+  C(type, rm);
+  return simplify_const(Z3_mk_fpa_to_fp_signed(ctx(), rm(), ast(), type.sort()),
                         *this);
 }
 
-expr expr::uint2fp(const expr &type) const {
-  C(type);
-  auto rm = Z3_mk_fpa_round_nearest_ties_to_even(ctx());
-  return simplify_const(Z3_mk_fpa_to_fp_unsigned(ctx(), rm, ast(), type.sort()),
-                        *this);
+expr expr::uint2fp(const expr &type, const expr &rm) const {
+  C(type, rm);
+  return
+    simplify_const(Z3_mk_fpa_to_fp_unsigned(ctx(), rm(), ast(), type.sort()),
+                   *this);
 }
 
 expr expr::mkUF(const char *name, const vector<expr> &args, const expr &range) {
@@ -1858,7 +1852,7 @@ expr expr::mkIf(const expr &cond, const expr &then, const expr &els) {
 
 expr expr::mkForAll(const set<expr> &vars, expr &&val) {
   if (vars.empty() || val.isConst() || !val.isValid())
-    return move(val);
+    return std::move(val);
 
   unique_ptr<Z3_app[]> vars_ast(new Z3_app[vars.size()]);
   unsigned i = 0;
@@ -1999,22 +1993,22 @@ set<expr> expr::leafs(unsigned max) const {
   unordered_set<Z3_ast> seen;
   set<expr> ret;
   do {
-    auto val = move(worklist.back());
+    auto val = std::move(worklist.back());
     worklist.pop_back();
     if (!seen.emplace(val()).second)
       continue;
 
     expr cond, then, els;
     if (val.isIf(cond, then, els)) {
-      worklist.emplace_back(move(then));
-      worklist.emplace_back(move(els));
+      worklist.emplace_back(std::move(then));
+      worklist.emplace_back(std::move(els));
     } else {
-      ret.emplace(move(val));
+      ret.emplace(std::move(val));
     }
 
     if (ret.size() + worklist.size() >= max) {
       for (auto &v : worklist)
-        ret.emplace(move(v));
+        ret.emplace(std::move(v));
       break;
     }
   } while (!worklist.empty());

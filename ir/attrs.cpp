@@ -149,11 +149,11 @@ ParamAttrs::encode(const State &s, const StateValue &val, const Type &ty) const 
                    derefOrNullBytes, align, has(NonNull), has(NoCapture));
 
   if (poisonImpliesUB()) {
-    UB.add(move(new_non_poison));
+    UB.add(std::move(new_non_poison));
     new_non_poison = true;
   }
 
-  return { move(UB), move(new_non_poison) };
+  return { std::move(UB), std::move(new_non_poison) };
 }
 
 
@@ -183,11 +183,11 @@ FnAttrs::encode(const State &s, const StateValue &val, const Type &ty) const {
                    derefOrNullBytes, align, has(NonNull), false);
 
   if (poisonImpliesUB()) {
-    UB.add(move(new_non_poison));
+    UB.add(std::move(new_non_poison));
     new_non_poison = true;
   }
 
-  return { move(UB), move(new_non_poison) };
+  return { std::move(UB), std::move(new_non_poison) };
 }
 
 
@@ -221,6 +221,7 @@ smt::expr FpRoundingMode::toSMT() const {
   case FpRoundingMode::RTP:     return expr::rtp();
   case FpRoundingMode::RTN:     return expr::rtn();
   case FpRoundingMode::RTZ:     return expr::rtz();
+  case FpRoundingMode::Default: UNREACHABLE();
   }
   UNREACHABLE();
 }
@@ -234,6 +235,17 @@ ostream& operator<<(std::ostream &os, FpRoundingMode rounding) {
   case FpRoundingMode::RTP:     str = "upward"; break;
   case FpRoundingMode::RTN:     str = "downward"; break;
   case FpRoundingMode::RTZ:     str = "towardzero"; break;
+  case FpRoundingMode::Default: UNREACHABLE();
+  }
+  return os << str;
+}
+
+ostream& operator<<(std::ostream &os, FpExceptionMode ex) {
+  const char *str;
+  switch (ex.mode) {
+  case FpExceptionMode::Ignore:  str = "ignore"; break;
+  case FpExceptionMode::MayTrap: str = "maytrap"; break;
+  case FpExceptionMode::Strict:  str = "strict"; break;
   }
   return os << str;
 }

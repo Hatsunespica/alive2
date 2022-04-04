@@ -14,11 +14,11 @@ using namespace IR;
 using namespace std;
 
 #define RETURN_VAL(op) \
-  return { op, move(attrs), move(param_attrs), false }
+  return { op, std::move(attrs), std::move(param_attrs), false }
 #define RETURN_EXACT() \
-  return { nullptr, move(attrs), move(param_attrs), false }
+  return { nullptr, std::move(attrs), std::move(param_attrs), false }
 #define RETURN_APPROX() \
-  return { nullptr, move(attrs), move(param_attrs), true }
+  return { nullptr, std::move(attrs), std::move(param_attrs), true }
 
 static unsigned align(llvm::CallInst &i) {
   auto a = i.getRetAlign();
@@ -39,11 +39,14 @@ known_call(llvm::CallInst &i, const llvm::TargetLibraryInfo &TLI,
 
   // TODO: add support for checking mismatch of C vs C++ alloc fns
   if (llvm::isMallocOrCallocLikeFn(&i, &TLI)) {
+    bool isNonNull = i.hasRetAttr(llvm::Attribute::NonNull);
+    //TODO: also null for C++'s new throwing operator
+
     // aligned malloc
     if (auto *algn = llvm::getAllocAlignment(&i, &TLI)) {
       if (auto algnint = dyn_cast<llvm::ConstantInt>(algn)) {
         RETURN_VAL(
-          make_unique<Malloc>(*ty, value_name(i), *args[1], false,
+          make_unique<Malloc>(*ty, value_name(i), *args[1], isNonNull,
                               algnint->getZExtValue()));
       } else {
         // TODO: add support for non-const alignments
@@ -58,13 +61,13 @@ known_call(llvm::CallInst &i, const llvm::TargetLibraryInfo &TLI,
         make_unique<Calloc>(*ty, value_name(i), *args[0], *args[1], align(i)));
 
     // malloc or new
-    bool isNonNull = i.getCalledFunction()->getName() != "malloc";
     RETURN_VAL(
       make_unique<Malloc>(*ty, value_name(i), *args[0], isNonNull, align(i)));
   }
   if (llvm::isReallocLikeFn(&i, &TLI)) {
-    RETURN_VAL(
-      make_unique<Malloc>(*ty, value_name(i), *args[0], *args[1], align(i)));
+    bool isNonNull = i.hasRetAttr(llvm::Attribute::NonNull);
+    RETURN_VAL(make_unique<Malloc>(*ty, value_name(i), *args[0], *args[1],
+                                   isNonNull, align(i)));
   }
   if (llvm::isFreeCall(&i, &TLI)) {
     if (i.hasFnAttr(llvm::Attribute::NoFree)) {
@@ -152,39 +155,54 @@ known_call(llvm::CallInst &i, const llvm::TargetLibraryInfo &TLI,
 
   case llvm::LibFunc_fabs:
   case llvm::LibFunc_fabsf:
-    RETURN_VAL(make_unique<UnaryOp>(*ty, value_name(i), *args[0], UnaryOp::FAbs,
-                                    parse_fmath(i)));
+    RETURN_VAL(make_unique<FpUnaryOp>(*ty, value_name(i), *args[0],
+                                      FpUnaryOp::FAbs, parse_fmath(i)));
 
   case llvm::LibFunc_ceil:
   case llvm::LibFunc_ceilf:
-    RETURN_VAL(
-      make_unique<UnaryOp>(*ty, value_name(i), *args[0], UnaryOp::Ceil));
+    RETURN_VAL(make_unique<FpUnaryOp>(*ty, value_name(i), *args[0],
+                                      FpUnaryOp::Ceil, parse_fmath(i)));
 
   case llvm::LibFunc_floor:
   case llvm::LibFunc_floorf:
-    RETURN_VAL(
-      make_unique<UnaryOp>(*ty, value_name(i), *args[0], UnaryOp::Floor));
+    RETURN_VAL(make_unique<FpUnaryOp>(*ty, value_name(i), *args[0],
+                                      FpUnaryOp::Floor, parse_fmath(i)));
+
+  case llvm::LibFunc_nearbyint:
+  case llvm::LibFunc_nearbyintf:
+    RETURN_VAL(make_unique<FpUnaryOp>(*ty, value_name(i), *args[0],
+                                      FpUnaryOp::NearbyInt, parse_fmath(i)));
+
+  case llvm::LibFunc_rint:
+  case llvm::LibFunc_rintf:
+    RETURN_VAL(make_unique<FpUnaryOp>(*ty, value_name(i), *args[0],
+                                      FpUnaryOp::RInt, parse_fmath(i)));
 
   case llvm::LibFunc_round:
   case llvm::LibFunc_roundf:
-    RETURN_VAL(
-      make_unique<UnaryOp>(*ty, value_name(i), *args[0], UnaryOp::Round));
+    RETURN_VAL(make_unique<FpUnaryOp>(*ty, value_name(i), *args[0],
+                                      FpUnaryOp::Round, parse_fmath(i)));
 
   case llvm::LibFunc_roundeven:
   case llvm::LibFunc_roundevenf:
-    RETURN_VAL(
-      make_unique<UnaryOp>(*ty, value_name(i), *args[0], UnaryOp::RoundEven));
+    RETURN_VAL(make_unique<FpUnaryOp>(*ty, value_name(i), *args[0],
+                                      FpUnaryOp::RoundEven, parse_fmath(i)));
 
   case llvm::LibFunc_trunc:
   case llvm::LibFunc_truncf:
-    RETURN_VAL(
-      make_unique<UnaryOp>(*ty, value_name(i), *args[0], UnaryOp::Trunc));
+    RETURN_VAL(make_unique<FpUnaryOp>(*ty, value_name(i), *args[0],
+                                      FpUnaryOp::Trunc, parse_fmath(i)));
+
+  case llvm::LibFunc_copysign:
+  case llvm::LibFunc_copysignf:
+    RETURN_VAL(make_unique<FpBinOp>(*ty, value_name(i), *args[0], *args[1],
+                                    FpBinOp::CopySign, parse_fmath(i)));
 
   case llvm::LibFunc_sqrt:
   case llvm::LibFunc_sqrtf:
     BB.addInstr(make_unique<Assume>(*args[0], Assume::WellDefined));
-    RETURN_VAL(
-      make_unique<UnaryOp>(*ty, value_name(i), *args[0], UnaryOp::Sqrt));
+    RETURN_VAL(make_unique<FpUnaryOp>(*ty, value_name(i), *args[0],
+                                      FpUnaryOp::Sqrt, parse_fmath(i)));
 
   case llvm::LibFunc_fwrite: {
     auto size = getInt(*args[1]);
@@ -205,17 +223,17 @@ known_call(llvm::CallInst &i, const llvm::TargetLibraryInfo &TLI,
         auto &byteTy = get_int_type(8); // FIXME
         auto &i32 = get_int_type(32);
         auto call
-          = make_unique<FnCall>(i32, value_name(i), "@fputc", move(attrs));
+          = make_unique<FnCall>(i32, value_name(i), "@fputc", std::move(attrs));
         auto load
           = make_unique<Load>(byteTy, value_name(i) + "#load", *args[0], 1);
         auto load_zext
            = make_unique<ConversionOp>(i32, value_name(i) + "#zext", *load,
                                        ConversionOp::ZExt);
-        call->addArg(*load_zext, move(param_attrs[0]));
-        call->addArg(*args[3], move(param_attrs[1]));
-        BB.addInstr(move(load));
-        BB.addInstr(move(load_zext));
-        RETURN_VAL(move(call));
+        call->addArg(*load_zext, std::move(param_attrs[0]));
+        call->addArg(*args[3], std::move(param_attrs[1]));
+        BB.addInstr(std::move(load));
+        BB.addInstr(std::move(load_zext));
+        RETURN_VAL(std::move(call));
       }
     }
   }
