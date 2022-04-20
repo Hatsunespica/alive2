@@ -552,6 +552,10 @@ bool expr::isFPNeg(expr &val) const {
   return isUnOp(val, Z3_OP_FPA_NEG);
 }
 
+bool expr::isIsFPZero() const {
+  return isAppOf(Z3_OP_FPA_IS_ZERO);
+}
+
 bool expr::isNaNCheck(expr &fp) const {
   if (auto app = isAppOf(Z3_OP_FPA_IS_NAN)) {
     fp = Z3_get_app_arg(ctx(), app, 0);
@@ -979,15 +983,25 @@ expr expr::abs() const {
   return mkIf(sge(mkUInt(0, s)), *this, mkInt(-1, s) * *this);
 }
 
+#define fold_fp_neg(fn)                                  \
+  do {                                                   \
+  expr cond, neg, v, v2;                                 \
+  if (isIf(cond, neg, v) && neg.isFPNeg(v2) && v.eq(v2)) \
+    return v.fn();                                       \
+} while (0)
+
 expr expr::isNaN() const {
+  fold_fp_neg(isNaN);
   return unop_fold(Z3_mk_fpa_is_nan);
 }
 
 expr expr::isInf() const {
+  fold_fp_neg(isInf);
   return unop_fold(Z3_mk_fpa_is_infinite);
 }
 
 expr expr::isFPZero() const {
+  fold_fp_neg(isFPZero);
   return unop_fold(Z3_mk_fpa_is_zero);
 }
 
@@ -1040,6 +1054,7 @@ expr expr::fdiv(const expr &rhs, const expr &rm) const {
 }
 
 expr expr::fabs() const {
+  fold_fp_neg(fabs);
   return unop_fold(Z3_mk_fpa_abs);
 }
 
