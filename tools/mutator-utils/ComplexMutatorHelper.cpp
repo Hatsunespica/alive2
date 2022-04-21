@@ -146,7 +146,7 @@ bool MutateInstructionHelper::shouldMutate() {
 void MutateInstructionHelper::mutate() {
   //do extra handling for br insts
   if(llvm::isa<llvm::BranchInst>(mutator->tmpIit)){
-    llvm::BranchInst* brInst=(llvm::BranchInst*)&*mutator->tmpIit;
+    /*llvm::BranchInst* brInst=(llvm::BranchInst*)&*mutator->tmpIit;
     unsigned sz=brInst->getNumSuccessors();
     llvm::SmallVector<llvm::BasicBlock*> bbs;
     if(sz>0){
@@ -158,7 +158,7 @@ void MutateInstructionHelper::mutate() {
       if(Random::getRandomBool()){
         brInst->setSuccessor(i,bbs[Random::getRandomUnsigned()%bbs.size()]);
       }
-    }
+    }*/
   }
   // 75% chances to add a new inst, 25% chances to replace with a existent usage
   else if ((Random::getRandomUnsigned() & 3) != 0) {
@@ -405,7 +405,18 @@ void RandomCodeInserterHelper::mutate() {
   // if not the first inst of this block, we can do a split
   llvm::Instruction *insertPoint = &*mutator->tmpIit;
   if (mutator->tmpBit->getFirstNonPHIOrDbg() != insertPoint) {
-    mutator->tmpBit->splitBasicBlock(mutator->tmpIit);
+    llvm::BasicBlock* oldBB=&*mutator->tmpBit;
+    llvm::Instruction* inst=oldBB->getTerminator();
+    llvm::SmallVector<llvm::BasicBlock*> succs;
+    for(size_t i=0;i<inst->getNumOperands();++i){
+      if(llvm::Value* val=inst->getOperand(i);llvm::isa<BasicBlock>(val)){
+        succs.push_back((llvm::BasicBlock*)val);
+      }
+    }
+    llvm::BasicBlock* newBB=mutator->tmpBit->splitBasicBlock(mutator->tmpIit);
+    for(auto bb:succs){
+      bb->replacePhiUsesWith(oldBB,newBB);
+    }
   }
   LLVMUtil::insertRandomCodeBefore(insertPoint);
 }
