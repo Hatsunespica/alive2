@@ -79,8 +79,8 @@ end:
     helpers.push_back(std::make_unique<MutateInstructionHelper>(this));
     whenMoveToNextInstFuncs.push_back(helpers.size() - 1);
 
-    /*helpers.push_back(std::make_unique<RandomCodeInserterHelper>(this));
-    whenMoveToNextInstFuncs.push_back(helpers.size() - 1);*/
+    helpers.push_back(std::make_unique<RandomCodeInserterHelper>(this));
+    whenMoveToNextInstFuncs.push_back(helpers.size() - 1);
 
     helpers.push_back(std::make_unique<FunctionCallInlineHelper>(this));
     whenMoveToNextInstFuncs.push_back(helpers.size() - 1);
