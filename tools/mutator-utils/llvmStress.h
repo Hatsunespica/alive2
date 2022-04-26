@@ -402,7 +402,7 @@ struct BinModifier : public Modifier {
     Value *Val1 = getRandomFromLLVMStressValue(Val0->getType());
 
     // Don't handle pointer types.
-    if (Val0->getType()->isPointerTy() || Val1->getType()->isPointerTy())
+    if (!(Val0->getType()->isIntegerTy() || Val0->getType()->isFloatingPointTy()))
       return;
 
     // Don't handle i1 types.
@@ -619,7 +619,10 @@ struct CastModifier : public Modifier {
     Value *V = getRandomFromLLVMStressVal();
     Type *VTy = V->getType();
     Type *DestTy = pickScalarType();
-
+    
+    if(!VTy->isIntegerTy()&&!VTy->isFloatingPointTy()){
+      return;
+    }
     // Handle vector casts vectors.
     if (VTy->isVectorTy()) {
       auto *VecTy = cast<FixedVectorType>(VTy);
@@ -692,9 +695,12 @@ struct SelectModifier : public Modifier {
     // Try a bunch of different select configuration until a valid one is found.
     Value *Val0 = getRandomFromLLVMStressVal();
     Value *Val1 = getRandomFromLLVMStressValue(Val0->getType());
-
+    //both operands have to be first calss type according to specification.
+    //Token ty aren't applied to select and phi as well
+    if(!Val0->getType()->isFirstClassType()||Val0->getType()->isTokenTy()){
+      return;
+    }
     Type *CondTy = Type::getInt1Ty(module->getContext());
-
     // If the value type is a vector, and we allow vector select, then in 50%
     // of the cases generate a vector select.
     if (isa<FixedVectorType>(Val0->getType()) &&
@@ -718,7 +724,7 @@ struct CmpModifier : public Modifier {
     Value *Val0 = getRandomFromLLVMStressVal();
     Value *Val1 = getRandomFromLLVMStressValue(Val0->getType());
 
-    if (Val0->getType()->isPointerTy())
+    if (!Val0->getType()->isIntegerTy()&&!Val0->getType()->isFloatingPointTy())
       return;
     bool fp = Val0->getType()->getScalarType()->isFloatingPointTy();
 
