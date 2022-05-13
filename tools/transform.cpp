@@ -30,13 +30,6 @@ using namespace std;
 using util::config::dbg;
 
 
-static bool is_arbitrary(const expr &e) {
-  if (e.isConst())
-    return false;
-  return check_expr(expr::mkForAll(e.vars(), expr::mkVar("#someval", e) != e)).
-           isUnsat();
-}
-
 static void print_single_varval(ostream &os, const State &st, const Model &m,
                                 const Value *var, const Type &type,
                                 const StateValue &val, unsigned child) {
@@ -68,10 +61,6 @@ static void print_single_varval(ostream &os, const State &st, const Model &m,
   // TODO: detect undef bits (total or partial) with an SMT query
 
   expr partial = m.eval(val.value);
-  if (is_arbitrary(partial)) {
-    os << "any";
-    return;
-  }
 
   type.printVal(os, st, m.eval(val.value, true));
 
@@ -988,6 +977,9 @@ static void calculateAndInitConstants(Transform &t) {
   num_nonlocals = num_nonlocals_src + num_globals - num_globals_src;
 
   observes_addresses |= has_int2ptr || has_ptr2int;
+  // condition can happen with ptr2int(poison)
+  if (has_ptr2int && num_nonlocals == 0)
+    ++num_nonlocals;
 
   if (!does_int_mem_access && !does_ptr_mem_access && has_fncall)
     does_int_mem_access = true;
