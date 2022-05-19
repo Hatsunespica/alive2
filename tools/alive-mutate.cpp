@@ -735,4 +735,7 @@ void timeMode() {
       exit(0);
     }
   }
+  if(testMode){
+    std::cout<<"Test mode ended. Number of mutants generated: "<<cnt<<"\n";
+  }
 }
