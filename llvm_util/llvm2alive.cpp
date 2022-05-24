@@ -833,8 +833,7 @@ public:
       case llvm::Intrinsic::smin:     op = BinOp::SMin; break;
       case llvm::Intrinsic::smax:     op = BinOp::SMax; break;
       case llvm::Intrinsic::abs:      op = BinOp::Abs; break;
-      default:
-        UNREACHABLE();
+      default: UNREACHABLE();
       }
       RETURN_IDENTIFIER(make_unique<BinOp>(*ty, value_name(i), *a, *b, op));
     }
@@ -886,12 +885,20 @@ public:
     }
     case llvm::Intrinsic::fshl:
     case llvm::Intrinsic::fshr:
+    case llvm::Intrinsic::smul_fix:
+    case llvm::Intrinsic::umul_fix:
+    case llvm::Intrinsic::smul_fix_sat:
+    case llvm::Intrinsic::umul_fix_sat:
     {
       PARSE_TRIOP();
       TernaryOp::Op op;
       switch (i.getIntrinsicID()) {
       case llvm::Intrinsic::fshl: op = TernaryOp::FShl; break;
       case llvm::Intrinsic::fshr: op = TernaryOp::FShr; break;
+      case llvm::Intrinsic::smul_fix: op = TernaryOp::SMulFix; break;
+      case llvm::Intrinsic::umul_fix: op = TernaryOp::UMulFix; break;
+      case llvm::Intrinsic::smul_fix_sat: op = TernaryOp::SMulFixSat; break;
+      case llvm::Intrinsic::umul_fix_sat: op = TernaryOp::UMulFixSat; break;
       default: UNREACHABLE();
       }
       RETURN_IDENTIFIER(
@@ -1013,7 +1020,7 @@ public:
     {
       PARSE_UNOP();
       FpConversionOp::Op op;
-      switch (i.getOpcode()) {
+      switch (i.getIntrinsicID()) {
       case llvm::Intrinsic::experimental_constrained_sitofp:  op = FpConversionOp::SIntToFP; break;
       case llvm::Intrinsic::experimental_constrained_uitofp:  op = FpConversionOp::UIntToFP; break;
       case llvm::Intrinsic::experimental_constrained_fptosi:  op = FpConversionOp::FPToSInt; break;
@@ -1028,18 +1035,27 @@ public:
       case llvm::Intrinsic::experimental_constrained_lround:
       case llvm::Intrinsic::llround:
       case llvm::Intrinsic::experimental_constrained_llround: op = FpConversionOp::LRound; break;
-      default:
-        return error(i);
+      default: UNREACHABLE();
       }
       RETURN_IDENTIFIER(make_unique<FpConversionOp>(*ty, value_name(i), *val,
                                                     op, parse_rounding(i),
                                                     parse_exceptions(i)));
     }
+    case llvm::Intrinsic::is_fpclass:
+    {
+      PARSE_BINOP();
+      TestOp::Op op;
+      switch (i.getIntrinsicID()) {
+      case llvm::Intrinsic::is_fpclass: op = TestOp::Is_FPClass; break;
+      default: UNREACHABLE();
+      }
+      RETURN_IDENTIFIER(make_unique<TestOp>(*ty, value_name(i), *a, *b, op));
+    }
     case llvm::Intrinsic::lifetime_start:
     case llvm::Intrinsic::lifetime_end:
     {
       PARSE_BINOP();
-      switch(getLifetimeKind(i)) {
+      switch (getLifetimeKind(i)) {
       case LIFETIME_START:
         RETURN_IDENTIFIER(make_unique<StartLifetime>(*b));
       case LIFETIME_START_FILLPOISON:
@@ -1518,10 +1534,12 @@ public:
         // introduce a new BB even if not always needed.
         auto val = i->getIncomingValue(idx);
         if (has_constant_expr(val)) {
+          auto bridge  = predecessor(i, idx);
+          auto &pred   = getBB(i->getIncomingBlock(idx));
+          BB = &Fn.insertBBAfter(bridge, pred);
+
           auto &phi_bb = getBB(i->getParent());
-          auto bridge = predecessor(i, idx);
-          BB = &Fn.insertBBBefore(bridge, phi_bb);
-          getBB(i->getIncomingBlock(idx)).replaceTargetWith(&phi_bb, BB);
+          pred.replaceTargetWith(&phi_bb, BB);
           if (auto op = get_operand(val)) {
             phi->addValue(*op, std::move(bridge));
             BB->addInstr(make_unique<Branch>(phi_bb));

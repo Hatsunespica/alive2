@@ -1182,6 +1182,10 @@ void TernaryOp::print(ostream &os) const {
   switch (op) {
   case FShl: str = "fshl "; break;
   case FShr: str = "fshr "; break;
+  case SMulFix: str = "smul_fix "; break;
+  case UMulFix: str = "umul_fix "; break;
+  case SMulFixSat: str = "smul_fix_sat "; break;
+  case UMulFixSat: str = "umul_fix_sat "; break;
   }
 
   os << getName() << " = " << str << *a << ", " << *b << ", " << *c;
@@ -1191,20 +1195,38 @@ StateValue TernaryOp::toSMT(State &s) const {
   auto &av = s[*a];
   auto &bv = s[*b];
   auto &cv = s[*c];
-  function<expr(const expr&, const expr&, const expr&)> fn;
-
-  switch (op) {
-  case FShl:
-    fn = expr::fshl;
-    break;
-  case FShr:
-    fn = expr::fshr;
-    break;
-  }
 
   auto scalar = [&](const auto &a, const auto &b, const auto &c) -> StateValue {
-    return { fn(a.value, b.value, c.value),
-             a.non_poison && b.non_poison && c.non_poison };
+  expr e, np;
+  switch (op) {
+  case FShl:
+    e = expr::fshl(a.value, b.value, c.value);
+    np = true;
+    break;
+  case FShr:
+    e = expr::fshr(a.value, b.value, c.value);
+    np = true;
+    break;
+  case SMulFix:
+    e = expr::smul_fix(a.value, b.value, c.value);
+    np = expr::smul_fix_no_soverflow(a.value, b.value, c.value);
+    break;
+  case UMulFix:
+    e = expr::umul_fix(a.value, b.value, c.value);
+    np = expr::umul_fix_no_uoverflow(a.value, b.value, c.value);
+    break;
+  case SMulFixSat:
+    e = expr::smul_fix_sat(a.value, b.value, c.value);
+    np = true;
+    break;
+  case UMulFixSat:
+    e = expr::umul_fix_sat(a.value, b.value, c.value);
+    np = true;
+    break;
+  default:
+    UNREACHABLE();
+  }
+  return { move(e), np && a.non_poison && b.non_poison && c.non_poison };
   };
 
   if (getType().isVectorType()) {
@@ -1213,7 +1235,8 @@ StateValue TernaryOp::toSMT(State &s) const {
 
     for (unsigned i = 0, e = ty->numElementsConst(); i != e; ++i) {
       vals.emplace_back(scalar(ty->extract(av, i), ty->extract(bv, i),
-                               ty->extract(cv, i)));
+                               (op == FShl || op == FShr) ?
+                               ty->extract(cv, i) : cv));
     }
     return ty->aggregateVals(vals);
   }
@@ -1221,11 +1244,33 @@ StateValue TernaryOp::toSMT(State &s) const {
 }
 
 expr TernaryOp::getTypeConstraints(const Function &f) const {
-  return Value::getTypeConstraints() &&
-         getType() == a->getType() &&
-         getType() == b->getType() &&
-         getType() == c->getType() &&
-         getType().enforceIntOrVectorType();
+  expr instrconstr;
+  switch (op) {
+  case FShl:
+  case FShr:
+    instrconstr =
+      getType() == a->getType() &&
+      getType() == b->getType() &&
+      getType() == c->getType() &&
+      getType().enforceIntOrVectorType();
+    break;
+  case SMulFix:
+  case UMulFix:
+  case SMulFixSat:
+  case UMulFixSat:
+    // LangRef only says that the third argument has to be an integer,
+    // but the IR verifier seems to reject anything other than i32, so
+    // we'll keep things simple and go with that constraint here too
+    instrconstr =
+      getType() == a->getType() &&
+      getType() == b->getType() &&
+      c->getType().enforceIntType(32) &&
+      getType().enforceIntOrVectorType();
+    break;
+  default:
+    UNREACHABLE();
+  }
+  return Value::getTypeConstraints() && instrconstr;
 }
 
 unique_ptr<Instr> TernaryOp::dup(const string &suffix) const {
@@ -1319,6 +1364,97 @@ expr FpTernaryOp::getTypeConstraints(const Function &f) const {
 unique_ptr<Instr> FpTernaryOp::dup(const string &suffix) const {
   return make_unique<FpTernaryOp>(getType(), getName() + suffix, *a, *b, *c, op,
                                   fmath, rm);
+}
+
+
+vector<Value*> TestOp::operands() const {
+  return { lhs, rhs };
+}
+
+bool TestOp::propagatesPoison() const {
+  return true;
+}
+
+void TestOp::rauw(const Value &what, Value &with) {
+  RAUW(lhs);
+  RAUW(rhs);
+}
+
+void TestOp::print(ostream &os) const {
+  const char *str = nullptr;
+  switch (op) {
+  case Is_FPClass: str = "is.fpclass "; break;
+  }
+
+  os << getName() << " = " << str << *lhs << ", " << *rhs;
+}
+
+StateValue TestOp::toSMT(State &s) const {
+  auto &a = s[*lhs];
+  auto &b = s[*rhs];
+  function<expr(const expr&)> fn;
+
+  switch (op) {
+  case Is_FPClass:
+    fn = [&](const expr &a) -> expr {
+      uint64_t n;
+      if (!b.value.isUInt(n) || !b.non_poison.isTrue()) {
+        s.addUB(expr(false));
+        return {};
+      }
+      OrExpr result;
+      // TODO: distinguish between quiet and signaling NaNs
+      if (n & (1 << 0))
+        result.add(a.isNaN());
+      if (n & (1 << 1))
+        result.add(a.isNaN());
+      if (n & (1 << 2))
+        result.add(a.isFPNegative() && a.isInf());
+      if (n & (1 << 3))
+        result.add(a.isFPNegative() && a.isFPNormal());
+      if (n & (1 << 4))
+        result.add(a.isFPNegative() && a.isFPSubNormal());
+      if (n & (1 << 5))
+        result.add(a.isFPNegZero());
+      if (n & (1 << 6))
+        result.add(a.isFPZero() && !a.isFPNegative());
+      if (n & (1 << 7))
+        result.add(!a.isFPNegative() && a.isFPSubNormal());
+      if (n & (1 << 8))
+        result.add(!a.isFPNegative() && a.isFPNormal());
+      if (n & (1 << 9))
+        result.add(!a.isFPNegative() && a.isInf());
+      return result().toBVBool();
+    };
+    break;
+  }
+
+  auto scalar = [&](const StateValue &v) -> StateValue {
+    return { fn(v.value), expr(v.non_poison) };
+  };
+
+  if (getType().isVectorType()) {
+    vector<StateValue> vals;
+    auto ty = lhs->getType().getAsAggregateType();
+
+    for (unsigned i = 0, e = ty->numElementsConst(); i != e; ++i) {
+      vals.emplace_back(scalar(ty->extract(a, i)));
+    }
+    return getType().getAsAggregateType()->aggregateVals(vals);
+  }
+  return scalar(a);
+}
+
+expr TestOp::getTypeConstraints(const Function &f) const {
+  return Value::getTypeConstraints() &&
+         lhs->getType().enforceFloatOrVectorType() &&
+         rhs->getType().enforceIntType(32) &&
+         getType().enforceIntOrVectorType(1) &&
+         getType().enforceVectorTypeEquiv(lhs->getType());
+}
+
+unique_ptr<Instr> TestOp::dup(const string &suffix) const {
+  return make_unique<TestOp>(getType(), getName() + suffix, *lhs, *rhs, op);
 }
 
 

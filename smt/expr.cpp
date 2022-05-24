@@ -869,6 +869,70 @@ expr expr::fshr(const expr &a, const expr &b, const expr &c) {
   return a << (width - c_mod_width) | b.lshr(c_mod_width);
 }
 
+/*
+ * FIXME: the fixed point functions are allowed to round towards zero
+ * or towards negative, but this (and its unsigned friend) only
+ * implements the round-towards-zero behavior. we'll need to fix this
+ * if we run across a target rounding the other way.
+ */
+static expr smul_fix_helper(const expr &a, const expr &b, const expr &c) {
+  auto width = a.bits();
+  expr a2 = a.sext(width), b2 = b.sext(width);
+  expr mul = a2 * b2;
+  expr scale2 = c.zextOrTrunc(2 * width);
+  return mul.ashr(scale2);
+}
+
+expr expr::smul_fix(const expr &a, const expr &b, const expr &c) {
+  C2(a);
+  expr r = smul_fix_helper(a, b, c);
+  return r.trunc(a.bits());
+}
+
+expr expr::smul_fix_no_soverflow(const expr &a, const expr &b, const expr &c) {
+  C2(a);
+  expr r = smul_fix_helper(a, b, c);
+  auto width = a.bits();
+  expr result = r.trunc(width);
+  return result.sext(width) == r;
+}
+
+expr expr::smul_fix_sat(const expr &a, const expr &b, const expr &c) {
+  C2(a);
+  expr r = smul_fix_helper(a, b, c);
+  auto width = a.bits();
+  return mkIf(smul_fix_no_soverflow(a, b, c),
+              smul_fix(a, b, c),
+              mkIf(r.isNegative(), IntSMin(width), IntSMax(width)));
+}
+
+static expr umul_fix_helper(const expr &a, const expr &b, const expr &c) {
+  auto width = a.bits();
+  expr a2 = a.zext(width), b2 = b.zext(width);
+  expr mul = a2 * b2;
+  expr scale2 = c.zextOrTrunc(2 * width);
+  return mul.lshr(scale2);
+}
+
+expr expr::umul_fix(const expr &a, const expr &b, const expr &c) {
+  C2(a);
+  expr r = umul_fix_helper(a, b, c);
+  return r.trunc(a.bits());
+}
+
+expr expr::umul_fix_no_uoverflow(const expr &a, const expr &b, const expr &c) {
+  C2(a);
+  auto width = a.bits();
+  return umul_fix_helper(a, b, c).extract(width * 2 - 1, width) == 0;
+}
+
+expr expr::umul_fix_sat(const expr &a, const expr &b, const expr &c) {
+  auto width = a.bits();
+  return mkIf(umul_fix_no_uoverflow(a, b, c),
+              umul_fix(a, b, c),
+              IntUMax(width));
+}
+
 expr expr::shl_no_soverflow(const expr &rhs) const {
   return (*this << rhs).ashr(rhs) == *this;
 }
@@ -1011,6 +1075,14 @@ expr expr::isFPNegative() const {
 
 expr expr::isFPNegZero() const {
   return isFPZero() && isFPNegative();
+}
+
+expr expr::isFPNormal() const {
+  return unop_fold(Z3_mk_fpa_is_normal);
+}
+
+expr expr::isFPSubNormal() const {
+  return unop_fold(Z3_mk_fpa_is_subnormal);
 }
 
 expr expr::rne() {
