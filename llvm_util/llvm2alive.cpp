@@ -1206,8 +1206,8 @@ public:
         break;
       }
 
-      case LLVMContext::MD_tbaa:
-        // skip this for now
+      case LLVMContext::MD_noundef:
+        BB->addInstr(make_unique<Assume>(i, Assume::WellDefined));
         break;
 
       // non-relevant for correctness
@@ -1267,21 +1267,17 @@ public:
         continue;
 
       case llvm::Attribute::ReadOnly:
-        if (!is_callsite)
-          attrs.set(ParamAttrs::NoWrite);
+        attrs.set(ParamAttrs::NoWrite);
         continue;
 
       case llvm::Attribute::WriteOnly:
-        if (!is_callsite)
-          attrs.set(ParamAttrs::NoRead);
+        attrs.set(ParamAttrs::NoRead);
         continue;
 
       case llvm::Attribute::ReadNone:
-        if (!is_callsite) {
-          // TODO: can this pointer be freed?
-          attrs.set(ParamAttrs::NoRead);
-          attrs.set(ParamAttrs::NoWrite);
-        }
+        // TODO: can this pointer be freed?
+        attrs.set(ParamAttrs::NoRead);
+        attrs.set(ParamAttrs::NoWrite);
         continue;
 
       case llvm::Attribute::Dereferenceable:
@@ -1436,6 +1432,9 @@ public:
                 f.isVarArg());
     reset_state(Fn);
 
+    auto &attrs = Fn.getFnAttrs();
+    auto [param_attrs, approx] = llvm_implict_attrs(f, TLI, attrs);
+
     llvm::AttributeList attrlist = f.getAttributes();
 
     for (unsigned idx = 0; idx < f.arg_size(); ++idx) {
@@ -1444,7 +1443,8 @@ public:
           attrlist.getAttributes(llvm::AttributeList::FirstArgIndex + idx);
 
       auto ty = llvm_type2alive(arg.getType());
-      ParamAttrs attrs;
+      ParamAttrs attrs = idx < param_attrs.size() ? param_attrs[idx]
+                                                  : ParamAttrs();
       if (!ty || !handleParamAttrs(argattr, attrs, false))
         return {};
       auto val = make_unique<Input>(*ty, value_name(arg), std::move(attrs));
@@ -1458,7 +1458,6 @@ public:
       Fn.addInput(std::move(val));
     }
 
-    auto &attrs = Fn.getFnAttrs();
     const auto &ridx = llvm::AttributeList::ReturnIndex;
     const auto &fnidx = llvm::AttributeList::FunctionIndex;
     handleRetAttrs(attrlist.getAttributes(ridx), attrs);
