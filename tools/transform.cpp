@@ -209,6 +209,16 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
         }
       }
 
+      if (auto call = dynamic_cast<const FnCall*>(var)) {
+        if (m.eval(val.return_domain).isFalse()) {
+          s << *var << " = function did not return!\n";
+          break;
+        } else if (var->isVoid()) {
+          s << "Function " << call->getFnName() << " returned\n";
+          continue;
+        }
+      }
+
       if (!dynamic_cast<const Return*>(var) && // domain always false after exec
           !m.eval(val.domain).isTrue()) {
         s << *var << " = UB triggered!\n";
@@ -380,24 +390,12 @@ static expr encode_undef_refinement(const Type &type, const State::ValTy &a,
 static void
 check_refinement(Errors &errs, const Transform &t, const State &src_state,
                  const State &tgt_state, const Value *var, const Type &type,
-                 const expr &fndom_a, const State::ValTy &ap,
-                 const expr &fndom_b, const State::ValTy &bp,
+                 const State::ValTy &ap, const State::ValTy &bp,
                  bool check_each_var) {
-  if (check_expr(!src_state.sinkDomain()).isUnsat()) {
-    errs.add("The source program doesn't reach a return instruction.\n"
-             "Consider increasing the unroll factor if it has loops", false);
-    return;
-  }
-
-  auto sink_tgt = tgt_state.sinkDomain();
-  if (check_expr(!sink_tgt).isUnsat()) {
-    errs.add("The target program doesn't reach a return instruction.\n"
-             "Consider increasing the unroll factor if it has loops", false);
-    return;
-  }
-
-  auto &dom_a = ap.domain;
-  auto &dom_b = bp.domain;
+  auto &fndom_a  = ap.domain;
+  auto &fndom_b  = bp.domain;
+  auto &retdom_a = ap.return_domain;
+  auto &retdom_b = bp.return_domain;
   auto &a = ap.val;
   auto &b = bp.val;
 
@@ -409,6 +407,7 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
 
   AndExpr axioms = src_state.getAxioms();
   axioms.add(tgt_state.getAxioms());
+  expr axioms_expr = axioms();
 
   // note that precondition->toSMT() may add stuff to getPre,
   // so order here matters
@@ -423,12 +422,27 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
   expr pre_src = pre_src_and();
   expr pre_tgt = pre_tgt_and();
 
-  expr axioms_expr = axioms();
-  pre_tgt &= !sink_tgt;
-
   if (check_expr(axioms_expr && (pre_src && pre_tgt)).isUnsat()) {
     errs.add("Precondition is always false", false);
     return;
+  }
+
+  {
+    auto sink_src = src_state.sinkDomain();
+    if (!sink_src.isTrue() && check_expr(axioms_expr && !sink_src).isUnsat()) {
+      errs.add("The source program doesn't reach a return instruction.\n"
+               "Consider increasing the unroll factor if it has loops", false);
+      return;
+    }
+
+    auto sink_tgt = tgt_state.sinkDomain();
+    if (!sink_tgt.isTrue() && check_expr(axioms_expr && !sink_tgt).isUnsat()) {
+      errs.add("The target program doesn't reach a return instruction.\n"
+               "Consider increasing the unroll factor if it has loops", false);
+      return;
+    }
+
+    pre_tgt &= !sink_tgt;
   }
 
   expr pre_src_exists, pre_src_forall;
@@ -480,10 +494,10 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
   // 2. Check return domain (noreturn check)
   {
     expr dom_constr;
-    if (dom_a.eq(fndom_a) && dom_b.eq(fndom_b)) { // A /\ B /\ A != B
+    if (retdom_a.eq(fndom_a) && retdom_b.eq(fndom_b)) { // A /\ B /\ A != B
       dom_constr = false;
     } else {
-      dom_constr = (fndom_a && fndom_b) && dom_a != dom_b;
+      dom_constr = (fndom_a && fndom_b) && retdom_a != retdom_b;
     }
 
     CHECK(std::move(dom_constr),
@@ -500,7 +514,9 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
   };
 
   auto [poison_cnstr, value_cnstr] = type.refines(src_state, tgt_state, a, b);
-  expr dom = dom_a && dom_b;
+  expr dom = retdom_a && retdom_b;
+  if (check_each_var)
+    dom &= fndom_a && fndom_b;
 
   CHECK(dom && !poison_cnstr,
         print_value, "Target is more poisonous than source");
@@ -1191,16 +1207,14 @@ Errors TransformVerify::verify() const {
 
         auto &val_tgt = tgt_state->at(*tgt_instrs.at(name));
         check_refinement(errs, t, *src_state, *tgt_state, var, var->getType(),
-                         val.domain, val, val_tgt.domain, val_tgt,
-                         check_each_var);
+                         val, val_tgt, check_each_var);
         if (errs)
           return errs;
       }
     }
 
     check_refinement(errs, t, *src_state, *tgt_state, nullptr, t.src.getType(),
-                     src_state->functionDomain()(), src_state->returnVal(),
-                     tgt_state->functionDomain()(), tgt_state->returnVal(),
+                     src_state->returnVal(), tgt_state->returnVal(),
                      check_each_var);
   } catch (AliveException e) {
     return std::move(e);

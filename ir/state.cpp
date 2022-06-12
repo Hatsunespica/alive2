@@ -150,9 +150,11 @@ void State::resetGlobals() {
 
 const State::ValTy& State::exec(const Value &v) {
   assert(undef_vars.empty());
+  domain.noreturn = true;
   auto val = v.toSMT(*this);
   ENSURE(values_map.try_emplace(&v, (unsigned)values.size()).second);
-  values.emplace_back(&v, ValTy{std::move(val), domain.UB(), std::move(undef_vars)});
+  values.emplace_back(&v, ValTy{std::move(val), domain.noreturn, domain.UB(),
+                                std::move(undef_vars)});
   analysis.unused_vars.insert(&v);
 
   // cleanup potentially used temporary values due to undef rewriting
@@ -386,7 +388,7 @@ StateValue* State::no_more_tmp_slots() {
 
 const StateValue& State::operator[](const Value &val) {
   auto &[var, val_uvars] = values[values_map.at(&val)];
-  auto &[sval, _ub, uvars] = val_uvars;
+  auto &[sval, _retdom, _ub, uvars] = val_uvars;
 
   auto undef_itr = analysis.non_undef_vals.find(&val);
   bool is_non_undef = undef_itr != analysis.non_undef_vals.end();
@@ -661,6 +663,7 @@ void State::addUB(AndExpr &&ubs) {
 void State::addNoReturn(const expr &cond) {
   if (cond.isFalse())
     return;
+  domain.noreturn = !cond;
   return_memory.add(memory, domain.path && cond);
   function_domain.add(domain() && cond);
   return_undef_vars.insert(undef_vars.begin(), undef_vars.end());
@@ -717,17 +720,18 @@ expr State::FnCallInput::refinedBy(
   if (!inaccessiblememonly) {
     assert(args_ptr.size() == args_ptr2.size());
     for (unsigned i = 0, e = args_ptr.size(); i != e; ++i) {
-      // TODO: needs to take read/read2 as input to control if mem blocks
-      // need to be compared
-      auto &[ptr_in, byval, is_nocapture] = args_ptr[i];
-      auto &[ptr_in2, byval2, is_nocapture2] = args_ptr2[i];
-      if (byval != byval2 || is_nocapture != is_nocapture2)
+      auto &ptr1 = args_ptr[i];
+      auto &ptr2 = args_ptr2[i];
+      if (!ptr1.eq_attrs(ptr2))
         return false;
 
-      expr eq_val = Pointer(m, ptr_in.value)
-                      .fninputRefined(Pointer(m2, ptr_in2.value),
-                                      undef_vars, byval2);
-      refines.add(ptr_in.non_poison.implies(eq_val && ptr_in2.non_poison));
+      if (ptr1.noread)
+        continue;
+
+      expr eq_val = Pointer(m, ptr1.val.value)
+                      .fninputRefined(Pointer(m2, ptr2.val.value),
+                                      undef_vars, ptr2.byval);
+      refines.add(ptr1.val.non_poison.implies(eq_val && ptr2.val.non_poison));
 
       if (!refines)
         return false;
@@ -743,9 +747,11 @@ expr State::FnCallInput::refinedBy(
     auto restrict_ptrs2 = argmemonly ? &args_ptr2 : nullptr;
     if (modifies_bid != -1u) {
       dummy1.emplace_back(
-        StateValue(Pointer(m, modifies_bid, false).release(), true), 0, false);
+        StateValue(Pointer(m, modifies_bid, false).release(), true), 0, false,
+        false, false);
       dummy2.emplace_back(
-        StateValue(Pointer(m2, modifies_bid, false).release(), true), 0, false);
+        StateValue(Pointer(m2, modifies_bid, false).release(), true), 0, false,
+        false, false);
       restrict_ptrs = &dummy1;
       restrict_ptrs2 = &dummy2;
     }
