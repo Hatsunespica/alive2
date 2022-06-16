@@ -40,6 +40,7 @@ bool has_noread;
 bool has_nowrite;
 bool has_dead_allocas;
 bool has_null_block;
+bool null_is_dereferenceable;
 bool does_int_mem_access;
 bool does_ptr_mem_access;
 bool does_ptr_store;
