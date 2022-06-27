@@ -2,6 +2,7 @@
 #include "tools/mutator-utils/util.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/IR/CFG.h"
@@ -34,7 +35,7 @@ protected:
 
   llvm::LLVMContext context;
   llvm::ExitOnError ExitOnErr;
-  std::unique_ptr<llvm::Module> pm;
+  std::shared_ptr<llvm::Module> pm;
 
 public:
   Mutator(bool debug = false) : debug(debug), pm(nullptr){};
@@ -48,11 +49,11 @@ public:
   void setDebug(bool debug) {
     this->debug = debug;
   }
-  virtual std::unique_ptr<llvm::Module> getModule() {
-    return std::move(pm);
+  virtual std::shared_ptr<llvm::Module> getModule() {
+    return pm;
   }
-  virtual void setModule(std::unique_ptr<llvm::Module> &&ptr) {
-    pm = std::move(ptr);
+  virtual void setModule(std::shared_ptr<llvm::Module> ptr) {
+    pm = ptr;
   }
 
   virtual void eraseFunctionInModule(const std::string& funcName){
@@ -342,13 +343,13 @@ public:
 */
 class SimpleMutator : public Mutator {
   std::list<std::pair<std::unique_ptr<Mutant>, llvm::StringRef>> mutants;
-  std::unordered_set<std::string> invalidFunctions;
+  llvm::StringSet<> invalidFunctions;
   decltype(mutants.begin()) it;
   bool isFirstRun;
 
 public:
   SimpleMutator(bool debug = false) : Mutator(debug), isFirstRun(true){};
-  SimpleMutator(const std::unordered_set<std::string> &invalidFunctions,
+  SimpleMutator(const llvm::StringSet<> &invalidFunctions,
                 bool debug = false)
       : Mutator(debug), invalidFunctions(invalidFunctions), isFirstRun(true){};
   virtual ~SimpleMutator() {
