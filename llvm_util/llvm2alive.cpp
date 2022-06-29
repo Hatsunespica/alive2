@@ -1617,15 +1617,10 @@ public:
     auto &entry_name = Fn.getFirstBB().getName();
     BB = &Fn.getBB("#init", true);
 
+    // Ensure all src globals exist in target as well
     for (auto &gvname : gvnamesInSrc) {
-      auto gv = getGlobalVariable(string(gvname));
-      if (!gv) {
-        // global variable removed or renamed
-        *out << "ERROR: Unsupported interprocedural transformation\n";
-        return {};
-      }
-      // If gvname already exists in tgt, get_operand will immediately return
-      get_operand(gv);
+      if (auto gv = getGlobalVariable(string(gvname)))
+        get_operand(gv);
     }
 
     map<string, unique_ptr<Store>> stores;
@@ -1659,7 +1654,7 @@ public:
     else
       BB->addInstr(make_unique<Branch>(Fn.getBB(entry_name)));
 
-    return std::move(Fn);
+    return Fn;
   }
 };
 }
