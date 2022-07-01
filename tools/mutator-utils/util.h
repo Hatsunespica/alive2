@@ -71,6 +71,154 @@ public:
   static float getRandomLLVMFloat();
 };
 
+/*
+  This is a class for holding dominated value with a backup function.
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-G(rear)
+  all operations on rear can be restored by a 'backup' operation
+
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-G(rear)
+
+  (update on rear)
+
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-H(rear)
+
+  (restore)
+
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-G(rear)
+*/
+class DominatedValueVector {
+  std::vector<llvm::Value *> domInst, backup, rear;
+  bool hasBackup;
+
+public:
+  DominatedValueVector() : hasBackup(false){};
+  ~DominatedValueVector() {
+    domInst.clear();
+    backup.clear();
+    rear.clear();
+  }
+  llvm::Value *&operator[](size_t idx) {
+    if (idx < domInst.size()) {
+      return domInst[idx];
+    } else {
+      return rear[idx - domInst.size()];
+    }
+  }
+
+  void push_back_tmp(llvm::Value *val) {
+    if (hasBackup) {
+      rear.push_back(val);
+    } else {
+      domInst.push_back(val);
+    }
+  }
+
+  void pop_back_tmp() {
+    if (hasBackup) {
+      rear.pop_back();
+    } else {
+      domInst.pop_back();
+    }
+  }
+
+  void push_back(llvm::Value *val) {
+    if (hasBackup) {
+      backup.push_back(val);
+      rear.push_back(val);
+    } else {
+      domInst.push_back(val);
+    }
+  }
+
+  void pop_back() {
+    if (hasBackup) {
+      backup.pop_back();
+      rear.pop_back();
+    } else {
+      domInst.pop_back();
+    }
+  }
+
+  void startBackup() {
+    hasBackup = true;
+  }
+
+  /**
+   * rear would be clear.
+   * all elements in backup would be push_back to domInst and backup clear;
+   */
+  void deleteBackup() {
+    hasBackup = false;
+    while (!backup.empty()) {
+      domInst.push_back(backup.back());
+      backup.pop_back();
+    }
+    rear.clear();
+  }
+
+  void restoreBackup() {
+    if (hasBackup) {
+      rear = backup;
+    }
+  }
+
+  void clear() {
+    hasBackup = false;
+    domInst.clear();
+    rear.clear();
+    backup.clear();
+  }
+
+  void resize(size_t sz) {
+    if (hasBackup) {
+      if (sz <= domInst.size()) {
+        deleteBackup();
+        domInst.resize(sz);
+      } else {
+        rear.resize(sz - domInst.size());
+        backup.resize(sz - domInst.size());
+      }
+    } else {
+      domInst.resize(sz);
+    }
+  }
+
+  llvm::Value *&back() {
+    return rear.empty() ? domInst.back() : rear.back();
+  }
+  bool inBackup() const {
+    return hasBackup;
+  }
+  size_t size() const {
+    return domInst.size() + rear.size();
+  }
+  size_t tmp_size() const {
+    return rear.size();
+  }
+  size_t empty() const {
+    return domInst.empty() && (!hasBackup || rear.empty());
+  }
+  int find(llvm::Value *val) const {
+    for (size_t i = 0; i < domInst.size(); ++i)
+      if (val == domInst[i])
+        return i;
+    if (hasBackup) {
+      for (size_t i = 0; i < rear.size(); ++i)
+        if (val == rear[i])
+          return i + domInst.size();
+    }
+    return -1;
+  }
+};
+
 class FunctionComparatorWrapper : public llvm::FunctionComparator {
 public:
   FunctionComparatorWrapper(const llvm::Function *func1,
@@ -141,17 +289,19 @@ public:
   getRandomFloatInstrinsic(llvm::Value *val1, llvm::Value *val2,
                            llvm::Instruction *insertBefore);
 
-  template<typename EleTy,typename T>
-  static 
-  EleTy findRandomInArray(llvm::ArrayRef<EleTy> array,T val,std::function<bool(EleTy,T)> predicate, EleTy failed){
-  for(size_t i=0,pos=Random::getRandomUnsigned()%array.size();i<array.size();++i,++pos){
-    if(pos==array.size()){
-      pos=0;
+  template <typename EleTy, typename T>
+  static EleTy findRandomInArray(llvm::ArrayRef<EleTy> array, T val,
+                                 std::function<bool(EleTy, T)> predicate,
+                                 EleTy failed) {
+    for (size_t i = 0, pos = Random::getRandomUnsigned() % array.size();
+         i < array.size(); ++i, ++pos) {
+      if (pos == array.size()) {
+        pos = 0;
+      }
+      if (predicate(array[pos], val)) {
+        return array[pos];
+      }
     }
-    if(predicate(array[pos],val)){
-      return array[pos];
-    }
+    return failed;
   }
-  return failed;
-}
 };

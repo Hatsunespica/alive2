@@ -1,169 +1,114 @@
 #pragma once
-#include "ComplexMutatorHelper.h"
-#include "simpleMutator.h"
+#include "mutator_helper.h"
+#include "tools/mutator-utils/util.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/Triple.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/IR/CFG.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/IRReader/IRReader.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/Support/Signals.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+#include <functional>
+#include <list>
 #include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
-/*
-  This is a class for holding dominated value with a backup function.
-         /E-F-G(backup)
-  A-B-C-D(domInst)
-         \E-F-G(rear)
-  all operations on rear can be restored by a 'backup' operation
+class Mutator {
+protected:
+  bool debug;
 
-         /E-F-G(backup)
-  A-B-C-D(domInst)
-         \E-F-G(rear)
-
-  (update on rear)
-
-         /E-F-G(backup)
-  A-B-C-D(domInst)
-         \E-F-H(rear)
-
-  (restore)
-
-         /E-F-G(backup)
-  A-B-C-D(domInst)
-         \E-F-G(rear)
-*/
-class DominatedValueVector {
-  std::vector<llvm::Value *> domInst, backup, rear;
-  bool hasBackup;
+  llvm::LLVMContext context;
+  llvm::ExitOnError ExitOnErr;
+  std::shared_ptr<llvm::Module> pm;
 
 public:
-  DominatedValueVector() : hasBackup(false){};
-  ~DominatedValueVector() {
-    domInst.clear();
-    backup.clear();
-    rear.clear();
+  Mutator(bool debug = false) : debug(debug), pm(nullptr){};
+  virtual ~Mutator(){};
+
+  bool openInputFile(const string &inputFile);
+  virtual bool init() = 0;
+  virtual void mutateModule(const std::string &outputFileName) = 0;
+  virtual void saveModule(const std::string &outputFileName) = 0;
+  virtual std::string getCurrentFunction() const = 0;
+  void setDebug(bool debug) {
+    this->debug = debug;
   }
-  llvm::Value *&operator[](size_t idx) {
-    if (idx < domInst.size()) {
-      return domInst[idx];
-    } else {
-      return rear[idx - domInst.size()];
-    }
+  virtual std::shared_ptr<llvm::Module> getModule() {
+    return pm;
+  }
+  virtual void setModule(std::shared_ptr<llvm::Module> ptr) {
+    pm = ptr;
   }
 
-  void push_back_tmp(llvm::Value *val) {
-    if (hasBackup) {
-      rear.push_back(val);
-    } else {
-      domInst.push_back(val);
-    }
-  }
-
-  void pop_back_tmp() {
-    if (hasBackup) {
-      rear.pop_back();
-    } else {
-      domInst.pop_back();
-    }
-  }
-
-  void push_back(llvm::Value *val) {
-    if (hasBackup) {
-      backup.push_back(val);
-      rear.push_back(val);
-    } else {
-      domInst.push_back(val);
-    }
-  }
-
-  void pop_back() {
-    if (hasBackup) {
-      backup.pop_back();
-      rear.pop_back();
-    } else {
-      domInst.pop_back();
-    }
-  }
-
-  void startBackup() {
-    hasBackup = true;
-  }
-
-  /**
-   * rear would be clear.
-   * all elements in backup would be push_back to domInst and backup clear;
-   */
-  void deleteBackup() {
-    hasBackup = false;
-    while (!backup.empty()) {
-      domInst.push_back(backup.back());
-      backup.pop_back();
-    }
-    rear.clear();
-  }
-
-  void restoreBackup() {
-    if (hasBackup) {
-      rear = backup;
-    }
-  }
-
-  void clear() {
-    hasBackup = false;
-    domInst.clear();
-    rear.clear();
-    backup.clear();
-  }
-
-  void resize(size_t sz) {
-    if (hasBackup) {
-      if (sz <= domInst.size()) {
-        deleteBackup();
-        domInst.resize(sz);
-      } else {
-        rear.resize(sz - domInst.size());
-        backup.resize(sz - domInst.size());
+  virtual void eraseFunctionInModule(const std::string &funcName) {
+    if (pm != nullptr) {
+      if (llvm::Function *func = pm->getFunction(funcName); func != nullptr) {
+        func->eraseFromParent();
       }
-    } else {
-      domInst.resize(sz);
     }
-  }
-
-  llvm::Value *&back() {
-    return rear.empty() ? domInst.back() : rear.back();
-  }
-  bool inBackup() const {
-    return hasBackup;
-  }
-  size_t size() const {
-    return domInst.size() + rear.size();
-  }
-  size_t tmp_size() const {
-    return rear.size();
-  }
-  size_t empty() const {
-    return domInst.empty() && (!hasBackup || rear.empty());
-  }
-  int find(llvm::Value *val) const {
-    for (size_t i = 0; i < domInst.size(); ++i)
-      if (val == domInst[i])
-        return i;
-    if (hasBackup) {
-      for (size_t i = 0; i < rear.size(); ++i)
-        if (val == rear[i])
-          return i + domInst.size();
-    }
-    return -1;
   }
 };
+
+class StubMutator : public Mutator {
+  decltype(pm->begin()) fit;
+  decltype(fit->begin()) bit;
+  decltype(bit->begin()) iit;
+
+  std::string currFunction;
+  void moveToNextInst();
+  void moveToNextBlock();
+  void moveToNextFunction();
+
+public:
+  StubMutator(bool debug) : Mutator(debug){};
+  virtual ~StubMutator(){};
+  virtual bool init() override;
+  virtual void mutateModule(const std::string &outputFileName) override;
+  virtual void saveModule(const std::string &outputFileName) override;
+  virtual std::string getCurrentFunction() const override;
+};
+
+/*class MutationHelper;
+class ShuffleHelper;
+class MutateInstructionHelper;
+class RandomMoveHelper;
+class RandomCodeInserterHelper;
+class FunctionCallInlineHelper;
+class FunctionAttributeHelper;
+class VoidFunctionCallRemoveHelper;
+class GEPHelper;
+class BinaryInstructionHelper;*/
 
 /*
   This class is responsible for generating different function mutants.
 */
-class FunctionMutant {
-friend class ShuffleHelper;
-friend class MutateInstructionHelper;
-friend class RandomMoveHelper;
-friend class RandomCodeInserterHelper;
-friend class FunctionCallInlineHelper;
+class FunctionMutator {
+  friend class ShuffleHelper;
+  friend class MutateInstructionHelper;
+  friend class RandomMoveHelper;
+  friend class RandomCodeInserterHelper;
+  friend class FunctionCallInlineHelper;
+  friend class FunctionAttributeHelper;
+  friend class VoidFunctionCallRemoveHelper;
+  friend class GEPHelper;
+  friend class BinaryInstructionHelper;
 
   llvm::Function *currentFunction, *functionInTmp;
   llvm::ValueToValueMapTy &vMap;
@@ -173,7 +118,6 @@ friend class FunctionCallInlineHelper;
   // domInst is used for maintain instructions which dominates current
   // instruction. this vector would be updated when moveToNextBasicBlock,
   // moveToNextInst and restoreBackup
-
 
   DominatedValueVector domVals;
   llvm::SmallVector<llvm::Value *> extraValues;
@@ -210,7 +154,7 @@ friend class FunctionCallInlineHelper;
   llvm::Value *getRandomValueFromExtraValue(llvm::Type *ty);
   llvm::Value *getRandomPointerValue(llvm::Type *ty);
   llvm::Value *getRandomFromGlobal(llvm::Type *ty);
-  llvm::SmallVector<llvm::Value *(FunctionMutant::*)(llvm::Type *)> valueFuncs;
+  llvm::SmallVector<llvm::Value *(FunctionMutator::*)(llvm::Type *)> valueFuncs;
   llvm::Value *getRandomValue(llvm::Type *ty);
 
 public:
@@ -218,14 +162,15 @@ public:
     return currentFunction;
   }
   void resetTmpCopy(std::shared_ptr<llvm::Module> copy);
-  FunctionMutant(llvm::Function *currentFunction, llvm::ValueToValueMapTy &vMap,
-                 const llvm::StringSet<> &filterSet,
-                 const llvm::SmallVector<llvm::Value *> &globals)
+  FunctionMutator(llvm::Function *currentFunction,
+                  llvm::ValueToValueMapTy &vMap,
+                  const llvm::StringSet<> &filterSet,
+                  const llvm::SmallVector<llvm::Value *> &globals)
       : currentFunction(currentFunction), vMap(vMap), filterSet(filterSet),
         globals(globals),
-        valueFuncs({&FunctionMutant::getRandomConstant,
-                    &FunctionMutant::getRandomDominatedValue,
-                    &FunctionMutant::getRandomValueFromExtraValue}) {
+        valueFuncs({&FunctionMutator::getRandomConstant,
+                    &FunctionMutator::getRandomDominatedValue,
+                    &FunctionMutator::getRandomValueFromExtraValue}) {
     bit = currentFunction->begin();
     iit = bit->begin();
     for (auto it = currentFunction->arg_begin();
@@ -247,41 +192,38 @@ public:
                         const llvm::StringSet<> &filterSet);
   void mutate();
   void debug();
-  //should pass the pointer itself.
-  void init(std::shared_ptr<FunctionMutant> self);
+  // should pass the pointer itself.
+  void init(std::shared_ptr<FunctionMutator> self);
 };
 
 /*
-  This class is used for doing complex mutations on a given file.
-  Current supported operation:
-    If a instruciton A use a definition of another interger type insturciton B,
-      replace B with a random generated SSA. This SSA would use definitions in
-  context.
+  This class is responsible for doing mutations on one module; it contains lots
+  of function mutant
 */
 
 class ComplexMutator : public Mutator {
   // some functions contain 'immarg' in their arguments. Skip those function
   // calls.
-  llvm::StringSet<> filterSet,invalidFunctions;
+  llvm::StringSet<> filterSet, invalidFunctions;
   std::shared_ptr<llvm::Module> tmpCopy;
   llvm::ValueToValueMapTy vMap;
   llvm::SmallVector<llvm::Value *> globals;
 
   size_t curFunction;
-  std::vector<std::shared_ptr<FunctionMutant>> functionMutants;
+  std::vector<std::shared_ptr<FunctionMutator>> functionMutants;
 
   void resetTmpModule();
 
 public:
   ComplexMutator(bool debug = false){};
   ComplexMutator(std::shared_ptr<llvm::Module> pm_,
-                 const llvm::StringSet<> &invalidFunctions,
-                 bool debug = false)
-      : Mutator(debug), invalidFunctions(invalidFunctions), tmpCopy(nullptr),curFunction(0){
+                 const llvm::StringSet<> &invalidFunctions, bool debug = false)
+      : Mutator(debug), invalidFunctions(invalidFunctions), tmpCopy(nullptr),
+        curFunction(0) {
     pm = pm_;
   };
   ComplexMutator(std::shared_ptr<llvm::Module> pm_, bool debug = false)
-      : Mutator(debug), tmpCopy(nullptr),curFunction(0) {
+      : Mutator(debug), tmpCopy(nullptr), curFunction(0) {
     pm = pm_;
   }
   ~ComplexMutator(){};
