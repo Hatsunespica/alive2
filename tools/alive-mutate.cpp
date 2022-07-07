@@ -22,12 +22,11 @@
 */
 
 #include "llvm_util/llvm2alive.h"
+#include "llvm_util/llvm_optimizer.h"
 #include "smt/smt.h"
-#include "tools/mutator-utils/ComplexMutator.h"
-#include "tools/mutator-utils/simpleMutator.h"
+#include "tools/mutator-utils/mutator.h"
 #include "tools/transform.h"
 #include "util/version.h"
-
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -108,15 +107,12 @@ llvm::cl::opt<bool> verbose(LLVM_ARGS_PREFIX "v",
                             llvm::cl::desc("specify if verbose mode is on"),
                             llvm::cl::cat(mutatorArgs));
 
-llvm::cl::opt<bool> newGVN(
-    LLVM_ARGS_PREFIX "newgvn", llvm::cl::value_desc("gvn optimization"),
-    llvm::cl::desc("turn on gvn optimization, default O2 will be disabled"),
-    llvm::cl::cat(mutatorArgs));
-
-llvm::cl::opt<bool> LICM(
-    LLVM_ARGS_PREFIX "licm", llvm::cl::value_desc("licm optimization"),
-    llvm::cl::desc("turn on licm optimization, default O2 will be disabled"),
-    llvm::cl::cat(mutatorArgs));
+llvm::cl::opt<string> optPass(
+    LLVM_ARGS_PREFIX "passes", llvm::cl::value_desc("optimization passes"),
+    llvm::cl::desc("Specify which LLVM passes to run (default=O2). "
+                   "The syntax is described at "
+                   "https://llvm.org/docs/NewPassManager.html#invoking-opt"),
+    llvm::cl::cat(alive_cmdargs), llvm::cl::init("O2"));
 
 llvm::cl::opt<bool>
     onlyDump(LLVM_ARGS_PREFIX "onlyDump",
@@ -124,10 +120,28 @@ llvm::cl::opt<bool>
              llvm::cl::desc("only dump IR files without"),
              llvm::cl::cat(mutatorArgs));
 
+llvm::cl::opt<int> copyFunctions(
+    LLVM_ARGS_PREFIX "copy",
+    llvm::cl::value_desc("number of function copies generated"),
+    llvm::cl::cat(mutatorArgs),
+    llvm::cl::desc(
+        "it describes number of copies for every function in the module"),
+    llvm::cl::init(0));
+
+llvm::cl::opt<bool> onEveryFunction(
+    LLVM_ARGS_PREFIX "onEveryFunction",
+    llvm::cl::value_desc("instead of mutating a single function, all function "
+                         "in the module would be mutated"),
+    llvm::cl::desc("instead of mutating a single function, all function in the "
+                   "module would be mutated"),
+    llvm::cl::cat(mutatorArgs));
+
 llvm::cl::opt<bool>
     testMode(LLVM_ARGS_PREFIX "test",
-             llvm::cl::value_desc("mutation file and verify its syntax, without calling alive2"),
-             llvm::cl::desc("mutation file and verify its syntax, without calling alive2"),
+             llvm::cl::value_desc(
+                 "mutation file and verify its syntax, without calling alive2"),
+             llvm::cl::desc(
+                 "mutation file and verify its syntax, without calling alive2"),
              llvm::cl::cat(mutatorArgs));
 
 filesystem::path inputPath, outputPath;
@@ -330,7 +344,7 @@ void copyMode(), timeMode(), loggerInit(int ith), init(),
     runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator),
     programEnd(), deleteLog(int ith);
 StubMutator stubMutator(false);
-unordered_set<std::string> invalidFuncNameSet;
+llvm::StringSet<> invalidFuncNameSet;
 bool hasInvalidFunc = false;
 bool isValidInputPath(), isValidOutputPath(), inputVerify();
 string getOutputFile(int ith, bool isOptimized = false);
@@ -377,7 +391,7 @@ version )EOF";
     }
   }
   if (verbose) {
-    cerr << "Current seed" << Random::getSeed() << "\n";
+  cerr << "Current seed" << Random::getSeed() << "\n";
   }
   if (numCopy > 0) {
     copyMode();
@@ -391,25 +405,27 @@ version )EOF";
 bool inputVerify() {
   if (stubMutator.openInputFile(testfile)) {
     if (onlyDump) {
-      std::unique_ptr<llvm::Module> M1 = stubMutator.getModule();
+      std::shared_ptr<llvm::Module> M1 = stubMutator.getModule();
       validFuncNum = M1->size();
       stubMutator.setModule(std::move(M1));
       return false;
     }
-    std::unique_ptr<llvm::Module> M1 = stubMutator.getModule();
+    std::shared_ptr<llvm::Module> M1 = stubMutator.getModule();
     LLVMUtil::removeTBAAMetadata(M1.get());
     auto &DL = M1.get()->getDataLayout();
-    // llvm::Triple targetTriple(M1.get()->getTargetTriple());
-    // llvm::TargetLibraryInfoWrapperPass TLI(targetTriple);
-    // int unsoundCases=-1;
     loggerInit(0);
     deleteLog(0);
     llvm_util::initializer llvm_util_init(*out, DL);
     unique_ptr<llvm::Module> M2 = CloneModule(*M1);
-    LLVMUtil::optimizeModule(M2.get(), newGVN,LICM);
-    // bool changed=false;
-    for (auto fit = M1->begin(); !testMode&&fit != M1->end(); ++fit)
+    llvm_util::optimize_module(M2.get(), optPass);
+    size_t unnamedFunction = 0;
+    for (auto fit = M1->begin(); !testMode && fit != M1->end(); ++fit) {
+      if (fit->getName().empty()) {
+        fit->setName(std::string("resetUnnamedFunction") +
+                     std::to_string(unnamedFunction++));
+      }
       if (!fit->isDeclaration() && !fit->getName().empty()) {
+        bool valid = false;
         if (llvm::Function *f2 = M2->getFunction(fit->getName());
             f2 != nullptr) {
           llvm::TargetLibraryInfoWrapperPass TLI(
@@ -417,21 +433,20 @@ bool inputVerify() {
           smt_init.emplace();
           auto r = verify(*fit, *f2, TLI, !opt_quiet, opt_always_verify);
           smt_init.reset();
-          if (r.status == Results::CORRECT || r.status == Results::SYNTACTIC_EQ) {
+          if (r.status == Results::CORRECT ||
+              r.status == Results::SYNTACTIC_EQ) {
             ++validFuncNum;
-          } else {
-            /*if(r.status==Results::UNSOUND){
-              loggerInit(unsoundCases--);
-              writeLog(false,*fit,r);
-            }*/
-            hasInvalidFunc = true;
-            // changed=true;
-            invalidFuncNameSet.insert(fit->getName().str());
+            valid = true;
           }
         }
+        if (!valid) {
+          hasInvalidFunc = true;
+          invalidFuncNameSet.insert(fit->getName());
+        }
       }
-    if(testMode){
-      validFuncNum=M1->getFunctionList().size();
+    }
+    if (testMode) {
+      validFuncNum = M1->getFunctionList().size();
     }
 
     stubMutator.setModule(std::move(M1));
@@ -503,10 +518,6 @@ void deleteLog(int ith) {
  */
 void loggerInit(int ith) {
   static std::ofstream nout("/dev/null");
-  // if(verbose){
-  // out=&nout;
-  // out=&cout;
-  //}else{
   fs::path fname = getOutputFile(ith) + "-log" + ".txt";
   fs::path path = fs::path(outputFolder.getValue()) / fname.filename();
   if (out_file.is_open()) {
@@ -530,7 +541,6 @@ void loggerInit(int ith) {
     path_z3log.replace_extension("z3_log.txt");
     smt::start_logging(path_z3log.c_str());
   }
-  //}
   util::config::set_debug(*out);
 }
 
@@ -562,7 +572,7 @@ string getOutputFile(int ith, bool isOptimized) {
  * LogIndex is updated here if find a value mismatch.
  */
 void runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator) {
-  std::unique_ptr<llvm::Module> M1 = nullptr;
+  std::shared_ptr<llvm::Module> M1 = nullptr;
   mutator.mutateModule(getOutputFile(ith));
   if (verbose || onlyDump) {
     mutator.saveModule(getOutputFile(ith));
@@ -579,17 +589,15 @@ void runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator) {
   loggerInit(ith);
 
   const string optFunc = mutator.getCurrentFunction();
-  std::string newFunc;
   bool shouldLog = false;
 
   llvm::Triple targetTriple(M1.get()->getTargetTriple());
   llvm::TargetLibraryInfoWrapperPass TLI(targetTriple);
 
-  if(testMode){
-    llvm::Function* pf1=M1->getFunction(optFunc);
-    llvm::ValueToValueMapTy vMap;
-    llvm::Function *pf2 = llvm::CloneFunction(pf1, vMap);
-    LLVMUtil::optimizeFunction(pf2, newGVN,LICM);
+  if (testMode) {
+    llvm::Function *pf1 = M1->getFunction(optFunc);
+    std::unique_ptr<llvm::Module> M2 = llvm::CloneModule(*(pf1->getParent()));
+    llvm_util::optimize_module(M2.get(), optPass);
     goto end;
   }
 
@@ -597,15 +605,10 @@ void runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator) {
 
   if (llvm::Function *pf1 = M1->getFunction(optFunc); pf1 != nullptr) {
     if (!pf1->isDeclaration()) {
-      /*if(llvm::verifyFunction(*pf1,&llvm::errs())){
-        pf1->print(llvm::errs());
-        llvm::errs()<<"current seed "<<Random::getSeed()<<"\n";
-        assert(!llvm::verifyFunction(*pf1));
-      }*/
-      llvm::ValueToValueMapTy vMap;
-      llvm::Function *pf2 = llvm::CloneFunction(pf1, vMap);
-      LLVMUtil::optimizeFunction(pf2, newGVN,LICM);
-      newFunc=pf2->getName();
+      std::unique_ptr<llvm::Module> M2 = llvm::CloneModule(*M1);
+      llvm_util::optimize_module(M2.get(), optPass);
+      llvm::Function *pf2 = M2->getFunction(pf1->getName());
+      assert(pf2 != nullptr && "pf2 clone failed");
       if (compareFunctions(*pf1, *pf2, TLI)) {
         shouldLog = true;
         if (opt_error_fatal)
@@ -645,14 +648,12 @@ end:
   tot_num_errors += num_errors;
 
   num_correct = num_unsound = num_failed = num_errors = 0;
-  mutator.setModule(std::move(M1));
-  if (testMode||(!verbose && !shouldLog)) {
+  if (testMode || (!verbose && !shouldLog)) {
     deleteLog(ith);
   }
   if (shouldLog) {
     mutator.saveModule(getOutputFile(ith));
   }
-  mutator.eraseFunctionInModule(newFunc);
 }
 
 /*
@@ -660,26 +661,20 @@ end:
  */
 void copyMode() {
   llvm::LLVMContext context;
-  std::unique_ptr<llvm::Module> pm = stubMutator.getModule();
-  std::unique_ptr<Mutator> mutators[2]{
-      std::make_unique<SimpleMutator>(invalidFuncNameSet, verbose),
-      std::make_unique<ComplexMutator>(CloneModule(*pm), invalidFuncNameSet,
-                                       verbose)};
-  // if(mutators[0]->openInputFile(testfile)&&mutators[1]->openInputFile(testfile)){
-  mutators[0]->setModule(CloneModule(*pm));
-  stubMutator.setModule(std::move(pm));
-  if (bool sInit = mutators[0]->init(), cInit = mutators[1]->init();
-      sInit || cInit) {
-        
+  std::shared_ptr<llvm::Module> pm = stubMutator.getModule();
+  if (copyFunctions != 0) {
+    LLVMUtil::propagateFunctionsInModule(pm.get(), copyFunctions);
+  }
+  std::unique_ptr<Mutator> mutator = std::make_unique<ModuleMutator>(
+      CloneModule(*pm), invalidFuncNameSet, verbose, onEveryFunction);
+  if (bool init = mutator->init(); init) {
+
     for (int i = 0; i < numCopy; ++i) {
       if (verbose) {
         std::cout << "Running " << i << "th copies." << std::endl;
       }
-      if (sInit ^ cInit) {
-        runOnce(i, context, *mutators[sInit ? 0 : 1]);
-      } else {
-        runOnce(i, context, *mutators[Random::getRandomUnsigned() & 1]);
-      }
+      runOnce(i, context, *mutator);
+
       if (tot_num_unsound > (unsigned long long)exitNum) {
         cerr << "Total unsound number exceeds the number of threshold.\n";
         // programEnd();
@@ -697,18 +692,14 @@ void copyMode() {
  */
 void timeMode() {
   llvm::LLVMContext context;
-  std::unique_ptr<llvm::Module> pm = stubMutator.getModule();
-  std::unique_ptr<Mutator> mutators[2]{
-      std::make_unique<SimpleMutator>(invalidFuncNameSet, verbose),
-      std::make_unique<ComplexMutator>(CloneModule(*pm), invalidFuncNameSet,
-                                       verbose)};
-  mutators[0]->setModule(CloneModule(*pm));
-  stubMutator.setModule(std::move(pm));
-  // if(mutators[0]->openInputFile(testfile)&&mutators[1]->openInputFile(testfile)){
-  bool sInit = mutators[0]->init();
-  bool cInit = mutators[1]->init();
-  if (!sInit && !cInit) {
-
+  std::shared_ptr<llvm::Module> pm = stubMutator.getModule();
+  if (copyFunctions != 0) {
+    LLVMUtil::propagateFunctionsInModule(pm.get(), copyFunctions);
+  }
+  std::unique_ptr<Mutator> mutator = std::make_unique<ModuleMutator>(
+      CloneModule(*pm), invalidFuncNameSet, verbose, onEveryFunction);
+  bool init = mutator->init();
+  if (!init) {
     cerr << "Cannot find any lotaion to mutate, " + testfile + " skipped\n";
     return;
   }
@@ -716,11 +707,7 @@ void timeMode() {
   int cnt = 1;
   while (sum.count() < timeElapsed) {
     auto t_start = std::chrono::high_resolution_clock::now();
-    if (sInit ^ cInit) {
-      runOnce(cnt, context, *mutators[sInit ? 0 : 1]);
-    } else {
-      runOnce(cnt, context, *mutators[Random::getRandomUnsigned() & 1]);
-    }
+    runOnce(cnt, context, *mutator);
 
     auto t_end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> cur = t_end - t_start;
@@ -735,7 +722,8 @@ void timeMode() {
       exit(0);
     }
   }
-  if(testMode){
-    std::cout<<"Test mode ended. Number of mutants generated: "<<cnt<<"\n";
+  if (testMode) {
+    std::cout << "Test mode ended. Number of mutants generated: " << cnt
+              << "\n";
   }
 }

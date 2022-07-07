@@ -1,30 +1,20 @@
 #pragma once
 #include "llvmStress.h"
 #include "llvm/ADT/StringExtras.h"
-#include "llvm/ADT/Triple.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/Bitcode/BitcodeReader.h"
-#include "llvm/IR/CFG.h"
+#include "llvm/Analysis/MemorySSA.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/IRReader/IRReader.h"
-#include "llvm/InitializePasses.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/PrettyStackTrace.h"
-#include "llvm/Support/Signals.h"
-#include "llvm/Support/SourceMgr.h"
-#include "llvm/Transforms/IPO/PassManagerBuilder.h"
-#include "llvm/Transforms/Scalar/NewGVN.h"
 #include "llvm/Transforms/Scalar/LICM.h"
-#include "llvm/Analysis/MemorySSA.h"
+#include "llvm/Transforms/Scalar/NewGVN.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/FunctionComparator.h"
- 
+
 #include <algorithm>
 #include <climits>
 #include <ctime>
@@ -81,39 +71,237 @@ public:
   static float getRandomLLVMFloat();
 };
 
-class FunctionComparatorWrapper:public llvm::FunctionComparator{
+/*
+  This is a class for holding dominated value with a backup function.
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-G(rear)
+  all operations on rear can be restored by a 'backup' operation
+
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-G(rear)
+
+  (update on rear)
+
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-H(rear)
+
+  (restore)
+
+         /E-F-G(backup)
+  A-B-C-D(domInst)
+         \E-F-G(rear)
+*/
+class DominatedValueVector {
+  std::vector<llvm::Value *> domInst, backup, rear;
+  bool hasBackup;
+
 public:
-  FunctionComparatorWrapper(const llvm::Function* func1, const llvm::Function* func2,  llvm::GlobalNumberState *GN):
-    llvm::FunctionComparator(func1, func2, GN){};
-  bool isSameSignature()const{
-    return  compareSignature()==0;
+  DominatedValueVector() : hasBackup(false){};
+  ~DominatedValueVector() {
+    domInst.clear();
+    backup.clear();
+    rear.clear();
+  }
+  llvm::Value *&operator[](size_t idx) {
+    if (idx < domInst.size()) {
+      return domInst[idx];
+    } else {
+      return rear[idx - domInst.size()];
+    }
+  }
+
+  void push_back_tmp(llvm::Value *val) {
+    if (hasBackup) {
+      rear.push_back(val);
+    } else {
+      domInst.push_back(val);
+    }
+  }
+
+  void pop_back_tmp() {
+    if (hasBackup) {
+      rear.pop_back();
+    } else {
+      domInst.pop_back();
+    }
+  }
+
+  void push_back(llvm::Value *val) {
+    if (hasBackup) {
+      backup.push_back(val);
+      rear.push_back(val);
+    } else {
+      domInst.push_back(val);
+    }
+  }
+
+  void pop_back() {
+    if (hasBackup) {
+      backup.pop_back();
+      rear.pop_back();
+    } else {
+      domInst.pop_back();
+    }
+  }
+
+  void startBackup() {
+    hasBackup = true;
+  }
+
+  /**
+   * rear would be clear.
+   * all elements in backup would be push_back to domInst and backup clear;
+   */
+  void deleteBackup() {
+    hasBackup = false;
+    while (!backup.empty()) {
+      domInst.push_back(backup.back());
+      backup.pop_back();
+    }
+    rear.clear();
+  }
+
+  void restoreBackup() {
+    if (hasBackup) {
+      rear = backup;
+    }
+  }
+
+  void clear() {
+    hasBackup = false;
+    domInst.clear();
+    rear.clear();
+    backup.clear();
+  }
+
+  void resize(size_t sz) {
+    if (hasBackup) {
+      if (sz <= domInst.size()) {
+        deleteBackup();
+        domInst.resize(sz);
+      } else {
+        rear.resize(sz - domInst.size());
+        backup.resize(sz - domInst.size());
+      }
+    } else {
+      domInst.resize(sz);
+    }
+  }
+
+  llvm::Value *&back() {
+    return rear.empty() ? domInst.back() : rear.back();
+  }
+  bool inBackup() const {
+    return hasBackup;
+  }
+  size_t size() const {
+    return domInst.size() + rear.size();
+  }
+  size_t tmp_size() const {
+    return rear.size();
+  }
+  size_t empty() const {
+    return domInst.empty() && (!hasBackup || rear.empty());
+  }
+  int find(llvm::Value *val) const {
+    for (size_t i = 0; i < domInst.size(); ++i)
+      if (val == domInst[i])
+        return i;
+    if (hasBackup) {
+      for (size_t i = 0; i < rear.size(); ++i)
+        if (val == rear[i])
+          return i + domInst.size();
+    }
+    return -1;
   }
 };
 
-class LLVMFunctionComparator{
+class FunctionComparatorWrapper : public llvm::FunctionComparator {
+public:
+  FunctionComparatorWrapper(const llvm::Function *func1,
+                            const llvm::Function *func2,
+                            llvm::GlobalNumberState *GN)
+      : llvm::FunctionComparator(func1, func2, GN){};
+  bool isSameSignature() const {
+    return compareSignature() == 0;
+  }
+};
+
+class LLVMFunctionComparator {
   llvm::GlobalNumberState gn;
   FunctionComparatorWrapper wrapper;
+
 public:
-  LLVMFunctionComparator():gn(llvm::GlobalNumberState()),wrapper(FunctionComparatorWrapper(nullptr,nullptr,nullptr)){}
-  bool compareSignature(const llvm::Function* func1, const llvm::Function* func2){
+  LLVMFunctionComparator()
+      : gn(llvm::GlobalNumberState()),
+        wrapper(FunctionComparatorWrapper(nullptr, nullptr, nullptr)) {}
+  bool compareSignature(const llvm::Function *func1,
+                        const llvm::Function *func2) {
     gn.clear();
-    wrapper=FunctionComparatorWrapper(func1,func2,&gn);
+    wrapper = FunctionComparatorWrapper(func1, func2, &gn);
     return wrapper.isSameSignature();
   }
 };
 
 class LLVMUtil {
   static LLVMFunctionComparator comparator;
+  const static std::vector<llvm::Instruction::BinaryOps> integerBinaryOps;
+  const static std::vector<llvm::Instruction::BinaryOps> floatBinaryOps;
+  const static std::vector<llvm::Intrinsic::ID> integerBinaryIntrinsic;
+  const static std::vector<llvm::Intrinsic::ID> floatBinaryIntrinsic;
+  const static std::vector<llvm::Intrinsic::ID> integerUnaryIntrinsic;
+  const static std::vector<llvm::Intrinsic::ID> floatUnaryIntrinsic;
+
 public:
-  static void optimizeModule(llvm::Module *M, bool newGVN = false, bool licm=false);
-  static void optimizeFunction(llvm::Function *f, bool newGVN = false,bool licm=false);
   static void removeTBAAMetadata(llvm::Module *M);
   static llvm::Value *insertGlobalVariable(llvm::Module *m, llvm::Type *ty);
   static void insertFunctionArguments(llvm::Function *f,
                                       llvm::SmallVector<llvm::Type *> tys,
                                       llvm::ValueToValueMapTy &VMap);
   static void insertRandomCodeBefore(llvm::Instruction *inst);
-  static bool compareSignature(const llvm::Function* func1, const llvm::Function* func2){
+  static void propagateFunctionsInModule(llvm::Module *M, size_t num);
+  static llvm::Value *
+  updateIntegerSize(llvm::Value *integer, llvm::IntegerType *newIntTy,
+                    llvm::Instruction *insertBefore = nullptr);
+  static bool compareSignature(const llvm::Function *func1,
+                               const llvm::Function *func2) {
     return comparator.compareSignature(func1, func2);
+  }
+  static llvm::Instruction *
+  getRandomIntegerInstruction(llvm::Value *val1, llvm::Value *val2,
+                              llvm::Instruction *insertBefore = nullptr);
+  static llvm::Instruction *
+  getRandomFloatInstruction(llvm::Value *val1, llvm::Value *val2,
+                            llvm::Instruction *insertBefore = nullptr);
+  static llvm::Instruction *
+  getRandomIntegerBinaryInstruction(llvm::Value *val1, llvm::Value *val2,
+                                    llvm::Instruction *insertBefore = nullptr);
+  static llvm::Instruction *
+  getRandomFloatBinaryInstruction(llvm::Value *val1, llvm::Value *val2,
+                                  llvm::Instruction *insertBefore = nullptr);
+  static llvm::Instruction *
+  getRandomIntegerIntrinsic(llvm::Value *val1, llvm::Value *val2,
+                            llvm::Instruction *insertBefore);
+  static llvm::Instruction *
+  getRandomFloatInstrinsic(llvm::Value *val1, llvm::Value *val2,
+                           llvm::Instruction *insertBefore);
+
+  template <typename EleTy, typename T>
+  static EleTy findRandomInArray(llvm::ArrayRef<EleTy> array, T val,
+                                 std::function<bool(EleTy, T)> predicate,
+                                 EleTy failed) {
+    for (size_t i = 0, pos = Random::getRandomUnsigned() % array.size();
+         i < array.size(); ++i, ++pos) {
+      if (pos == array.size()) {
+        pos = 0;
+      }
+      if (predicate(array[pos], val)) {
+        return array[pos];
+      }
+    }
+    return failed;
   }
 };

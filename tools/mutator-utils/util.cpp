@@ -1,5 +1,4 @@
 #include "util.h"
-#include "llvm/Analysis/IntervalPartition.h"
 
 std::random_device Random::rd;
 std::uniform_int_distribution<int> Random::dist(0, 2147483647u);
@@ -115,64 +114,6 @@ float Random::getRandomLLVMFloat() {
   }
 }
 
-void LLVMUtil::optimizeModule(llvm::Module *M, bool newGVN,bool licm) {
-  llvm::LoopAnalysisManager LAM;
-  llvm::FunctionAnalysisManager FAM;
-  llvm::CGSCCAnalysisManager CGAM;
-  llvm::ModuleAnalysisManager MAM;
-  
-  llvm::PassBuilder PB;
-  PB.registerModuleAnalyses(MAM);
-  PB.registerCGSCCAnalyses(CGAM);
-  PB.registerFunctionAnalyses(FAM);
-  PB.registerLoopAnalyses(LAM);
-  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-
-  llvm::FunctionPassManager FPM;
-  if (newGVN||licm) {
-    if(newGVN){
-      FPM.addPass(llvm::NewGVNPass());
-    }
-    if(licm){
-      FPM.addPass(llvm::createFunctionToLoopPassAdaptor(llvm::LICMPass(llvm::LICMOptions()),true));
-    }
-  } else {
-    FPM = PB.buildFunctionSimplificationPipeline(
-        llvm::OptimizationLevel::O2, llvm::ThinOrFullLTOPhase::None);
-  }
-  llvm::ModulePassManager MPM;
-  MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
-  MPM.run(*M, MAM);
-}
-
-void LLVMUtil::optimizeFunction(llvm::Function *f, bool newGVN, bool licm) {
-  llvm::LoopAnalysisManager LAM;
-  llvm::FunctionAnalysisManager FAM;
-  llvm::CGSCCAnalysisManager CGAM;
-  llvm::ModuleAnalysisManager MAM;
-
-  llvm::PassBuilder PB;
-  PB.registerModuleAnalyses(MAM);
-  PB.registerCGSCCAnalyses(CGAM);
-  PB.registerFunctionAnalyses(FAM);
-  PB.registerLoopAnalyses(LAM);
-  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-
-  llvm::FunctionPassManager FPM;
-  if (newGVN||licm) {
-    if(newGVN){
-      FPM.addPass(llvm::NewGVNPass());
-    }
-    if(licm){
-      FPM.addPass(llvm::createFunctionToLoopPassAdaptor(llvm::LICMPass(llvm::LICMOptions()),true));
-    }
-  } else {
-    FPM = PB.buildFunctionSimplificationPipeline(
-        llvm::OptimizationLevel::O2, llvm::ThinOrFullLTOPhase::None);
-  }
-  FPM.run(*f, FAM);
-}
-
 llvm::Value *LLVMUtil::insertGlobalVariable(llvm::Module *m, llvm::Type *ty) {
   static const std::string GLOBAL_VAR_NAME_PREFIX = "aliveMutateGlobalVar";
   static int varCount = 0;
@@ -183,6 +124,24 @@ llvm::Value *LLVMUtil::insertGlobalVariable(llvm::Module *m, llvm::Type *ty) {
   val->setLinkage(llvm::GlobalValue::LinkageTypes::ExternalLinkage);
   val->setAlignment(llvm::MaybeAlign(1));
   return val;
+}
+
+void LLVMUtil::propagateFunctionsInModule(llvm::Module *M, size_t num) {
+  llvm::SmallVector<llvm::StringRef> funcNames;
+  for (auto fit = M->begin(); fit != M->end(); ++fit) {
+    if (!fit->isDeclaration()) {
+      funcNames.push_back(fit->getName());
+    }
+  }
+  for (size_t i = 0; i < funcNames.size(); ++i) {
+    llvm::Function *func = M->getFunction(funcNames[i]);
+    assert(func != nullptr && "cannot find function when propagate functions");
+    llvm::ValueToValueMapTy vMap;
+    for (size_t times = 0; times < num; ++times) {
+      CloneFunction(func, vMap);
+      vMap.clear();
+    }
+  }
 }
 
 void LLVMUtil::insertFunctionArguments(llvm::Function *F,
@@ -225,11 +184,29 @@ void LLVMUtil::insertFunctionArguments(llvm::Function *F,
   CloneFunctionInto(NewF, F, VMap,
                     llvm::CloneFunctionChangeType::LocalChangesOnly, Returns,
                     "", nullptr);
+  NewF->setName("aliveMutateGeneratedTmpFunction");
   std::string oldFuncName = F->getName().str(),
               newFuncName = NewF->getName().str();
-  NewF->setName("tmpFunctionNameQuinella");
   F->setName(newFuncName);
   NewF->setName(oldFuncName);
+}
+
+llvm::Value *LLVMUtil::updateIntegerSize(llvm::Value *integer,
+                                         llvm::IntegerType *newIntTy,
+                                         llvm::Instruction *insertBefore) {
+  assert(integer->getType()->isIntegerTy() &&
+         "should be a integer type to update the size");
+  llvm::IntegerType *oldIntTy = (llvm::IntegerType *)integer->getType();
+  size_t oldSize = oldIntTy->getBitWidth(), newSize = newIntTy->getBitWidth();
+  if (oldSize < newSize) {
+    return llvm::CastInst::Create(llvm::Instruction::CastOps::ZExt, integer,
+                                  newIntTy, "", insertBefore);
+  } else if (oldSize > newSize) {
+    return llvm::CastInst::Create(llvm::Instruction::CastOps::Trunc, integer,
+                                  newIntTy, "", insertBefore);
+  } else {
+    return integer;
+  }
 }
 
 void LLVMUtil::removeTBAAMetadata(llvm::Module *M) {
@@ -243,7 +220,158 @@ void LLVMUtil::removeTBAAMetadata(llvm::Module *M) {
   }
 }
 
+const std::vector<llvm::Instruction::BinaryOps> LLVMUtil::integerBinaryOps{
+    llvm::Instruction::Add,  llvm::Instruction::Sub,  llvm::Instruction::Mul,
+    llvm::Instruction::SDiv, llvm::Instruction::UDiv, llvm::Instruction::SRem,
+    llvm::Instruction::URem, llvm::Instruction::Shl,  llvm::Instruction::LShr,
+    llvm::Instruction::AShr, llvm::Instruction::And,  llvm::Instruction::Xor,
+    llvm::Instruction::Or};
+
+const std::vector<llvm::Instruction::BinaryOps> LLVMUtil::floatBinaryOps{
+    llvm::Instruction::FAdd, llvm::Instruction::FSub, llvm::Instruction::FMul,
+    llvm::Instruction::FDiv, llvm::Instruction::FRem};
+
+const std::vector<llvm::Intrinsic::ID> LLVMUtil::integerBinaryIntrinsic{
+    llvm::Intrinsic::IndependentIntrinsics::smax,
+    llvm::Intrinsic::IndependentIntrinsics::smin,
+    llvm::Intrinsic::IndependentIntrinsics::umax,
+    llvm::Intrinsic::IndependentIntrinsics::umin,
+    llvm::Intrinsic::IndependentIntrinsics::sadd_sat,
+    llvm::Intrinsic::IndependentIntrinsics::uadd_sat,
+    llvm::Intrinsic::IndependentIntrinsics::ssub_sat,
+    llvm::Intrinsic::IndependentIntrinsics::usub_sat,
+    llvm::Intrinsic::IndependentIntrinsics::sshl_sat,
+    llvm::Intrinsic::IndependentIntrinsics::ushl_sat
+
+};
+
+const std::vector<llvm::Intrinsic::ID> LLVMUtil::floatBinaryIntrinsic{
+    llvm::Intrinsic::IndependentIntrinsics::pow,
+    llvm::Intrinsic::IndependentIntrinsics::minnum,
+    llvm::Intrinsic::IndependentIntrinsics::maxnum,
+    llvm::Intrinsic::IndependentIntrinsics::minimum,
+    llvm::Intrinsic::IndependentIntrinsics::maximum,
+    llvm::Intrinsic::IndependentIntrinsics::copysign};
+
+const std::vector<llvm::Intrinsic::ID> LLVMUtil::integerUnaryIntrinsic{
+    llvm::Intrinsic::IndependentIntrinsics::bitreverse,
+    llvm::Intrinsic::IndependentIntrinsics::ctpop,
+};
+
+const std::vector<llvm::Intrinsic::ID> LLVMUtil::floatUnaryIntrinsic{
+    llvm::Intrinsic::IndependentIntrinsics::sqrt,
+    llvm::Intrinsic::IndependentIntrinsics::sin,
+    llvm::Intrinsic::IndependentIntrinsics::cos,
+    llvm::Intrinsic::IndependentIntrinsics::exp,
+    llvm::Intrinsic::IndependentIntrinsics::exp2,
+    llvm::Intrinsic::IndependentIntrinsics::log,
+    llvm::Intrinsic::IndependentIntrinsics::log10,
+    llvm::Intrinsic::IndependentIntrinsics::log2,
+    llvm::Intrinsic::IndependentIntrinsics::fabs,
+    llvm::Intrinsic::IndependentIntrinsics::floor,
+    llvm::Intrinsic::IndependentIntrinsics::ceil,
+    llvm::Intrinsic::IndependentIntrinsics::trunc,
+    llvm::Intrinsic::IndependentIntrinsics::rint,
+    llvm::Intrinsic::IndependentIntrinsics::nearbyint,
+    llvm::Intrinsic::IndependentIntrinsics::round,
+    llvm::Intrinsic::IndependentIntrinsics::roundeven,
+    llvm::Intrinsic::IndependentIntrinsics::canonicalize};
+
 void LLVMUtil::insertRandomCodeBefore(llvm::Instruction *inst) {
   RandomCodePieceGenerator::insertCodeBefore(
       inst, 5 + (Random::getRandomUnsigned() & 15)); // last 4 binary bits
+}
+
+llvm::Instruction *
+LLVMUtil::getRandomIntegerInstruction(llvm::Value *val1, llvm::Value *val2,
+                                      llvm::Instruction *insertBefore) {
+  assert(val1->getType()->isIntegerTy() &&
+         "should be an integer to get an int instruction!");
+  assert(val2->getType()->isIntegerTy() &&
+         "should be an integer to get an int instruction!");
+  return Random::getRandomBool()
+             ? getRandomIntegerBinaryInstruction(val1, val2, insertBefore)
+             : getRandomIntegerIntrinsic(val1, val2, insertBefore);
+}
+
+llvm::Instruction *
+LLVMUtil::getRandomFloatInstruction(llvm::Value *val1, llvm::Value *val2,
+                                    llvm::Instruction *insertBefore) {
+  assert(val1->getType()->isFloatingPointTy() &&
+         "should be a floating point to get a float instruction!");
+  assert(val2->getType()->isFloatingPointTy() &&
+         "should be a floating point to get a float instruction!");
+  return Random::getRandomBool()
+             ? getRandomFloatBinaryInstruction(val1, val2, insertBefore)
+             : getRandomFloatInstrinsic(val1, val2, insertBefore);
+}
+
+llvm::Instruction *LLVMUtil::getRandomIntegerBinaryInstruction(
+    llvm::Value *val1, llvm::Value *val2, llvm::Instruction *insertBefore) {
+  assert(val1->getType()->isIntegerTy() &&
+         "should be an integer to get an int instruction!");
+  assert(val2->getType()->isIntegerTy() &&
+         "should be an integer to get an int instruction!");
+  llvm::Instruction::BinaryOps Op =
+      integerBinaryOps[Random::getRandomUnsigned() % integerBinaryOps.size()];
+  return llvm::BinaryOperator::Create(Op, val1, val2, "", insertBefore);
+}
+
+llvm::Instruction *
+LLVMUtil::getRandomFloatBinaryInstruction(llvm::Value *val1, llvm::Value *val2,
+                                          llvm::Instruction *insertBefore) {
+  assert(val1->getType()->isFloatingPointTy() &&
+         "should be a floating point to get a float instruction!");
+  assert(val2->getType()->isFloatingPointTy() &&
+         "should be a floating point to get a float instruction!");
+  llvm::Instruction::BinaryOps Op =
+      floatBinaryOps[Random::getRandomUnsigned() % floatBinaryOps.size()];
+  return llvm::BinaryOperator::Create(Op, val1, val2, "", insertBefore);
+}
+
+llvm::Instruction *
+LLVMUtil::getRandomIntegerIntrinsic(llvm::Value *val1, llvm::Value *val2,
+                                    llvm::Instruction *insertBefore) {
+  std::vector<llvm::Type *> tys{val1->getType()};
+  llvm::Module *M = insertBefore->getModule();
+  size_t pos = Random::getRandomUnsigned() %
+               (integerUnaryIntrinsic.size() + integerBinaryIntrinsic.size());
+  bool isUnary = pos < integerUnaryIntrinsic.size();
+  llvm::Function *func = nullptr;
+  std::vector<llvm::Value *> args{val1};
+  if (isUnary) {
+    func = llvm::Intrinsic::getDeclaration(M, integerUnaryIntrinsic[pos], tys);
+  } else {
+    pos -= integerUnaryIntrinsic.size();
+    tys.push_back(val2->getType());
+    func = llvm::Intrinsic::getDeclaration(M, integerBinaryIntrinsic[pos], tys);
+    args.push_back(val2);
+  }
+  assert(func != nullptr && "intrinsic function shouldn't be nullptr!");
+  llvm::CallInst *inst = llvm::CallInst::Create(func->getFunctionType(), func,
+                                                args, "", insertBefore);
+  return inst;
+}
+
+llvm::Instruction *
+LLVMUtil::getRandomFloatInstrinsic(llvm::Value *val1, llvm::Value *val2,
+                                   llvm::Instruction *insertBefore) {
+  std::vector<llvm::Type *> tys{val1->getType(), val2->getType()};
+  llvm::Module *M = insertBefore->getModule();
+  size_t pos = Random::getRandomUnsigned() %
+               (floatUnaryIntrinsic.size() + floatBinaryIntrinsic.size());
+  bool isUnary = pos < floatUnaryIntrinsic.size();
+  llvm::Function *func = nullptr;
+  std::vector<llvm::Value *> args{val1};
+  if (isUnary) {
+    func = llvm::Intrinsic::getDeclaration(M, floatUnaryIntrinsic[pos], tys);
+  } else {
+    pos -= floatUnaryIntrinsic.size();
+    func = llvm::Intrinsic::getDeclaration(M, floatBinaryIntrinsic[pos], tys);
+    args.push_back(val2);
+  }
+  assert(func != nullptr && "intrinsic function shouldn't be nullptr!");
+  llvm::CallInst *inst = llvm::CallInst::Create(func->getFunctionType(), func,
+                                                args, "", insertBefore);
+  return inst;
 }
