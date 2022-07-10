@@ -146,7 +146,10 @@ class llvm2alive_ : public llvm::InstVisitor<llvm2alive_, unique_ptr<Instr>> {
                                   "%__copy_" + to_string(copy_idx++), *ag,
                                   UnaryOp::Copy);
     auto val = v.get();
-    BB->addInstr(std::move(v));
+    if (insert_constexpr_before)
+      BB->addInstrAt(std::move(v), insert_constexpr_before, true);
+    else
+      BB->addInstr(std::move(v));
     return val;
   }
 
@@ -1542,8 +1545,9 @@ public:
 
     // patch phi nodes for recursive defs
     for (auto &[phi, i] : todo_phis) {
+      insert_constexpr_before = phi;
+      BB = const_cast<BasicBlock*>(&Fn.bbOf(*phi));
       for (unsigned idx = 0, e = i->getNumIncomingValues(); idx != e; ++idx) {
-        insert_constexpr_before = phi;
         if (auto op = get_operand(i->getIncomingValue(idx))) {
           phi->addValue(*op, value_name(*i->getIncomingBlock(idx)));
         } else {
@@ -1579,6 +1583,7 @@ public:
     // If there is a global variable with initializer, put them at init block.
     auto &entry_name = Fn.getFirstBB().getName();
     BB = &Fn.getBB("#init", true);
+    insert_constexpr_before = nullptr;
 
     // Ensure all src globals exist in target as well
     for (auto &gvname : gvnamesInSrc) {
