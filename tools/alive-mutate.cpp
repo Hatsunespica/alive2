@@ -411,6 +411,7 @@ bool inputVerify() {
       return false;
     }
     std::shared_ptr<llvm::Module> M1 = stubMutator.getModule();
+    llvm::errs()<<M1->getModuleIdentifier()<<"AAAAA\n";
     LLVMUtil::removeTBAAMetadata(M1.get());
     auto &DL = M1.get()->getDataLayout();
     loggerInit(0);
