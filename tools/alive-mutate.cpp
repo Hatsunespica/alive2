@@ -390,9 +390,9 @@ version )EOF";
               "skipped during mutation phrase.\n";
     }
   }
-  // if (verbose) {
+  if (verbose) {
   cerr << "Current seed" << Random::getSeed() << "\n";
-  //}
+  }
   if (numCopy > 0) {
     copyMode();
   } else if (timeElapsed > 0) {
@@ -411,7 +411,7 @@ bool inputVerify() {
       return false;
     }
     std::shared_ptr<llvm::Module> M1 = stubMutator.getModule();
-    LLVMUtil::removeTBAAMetadata(M1.get());
+    mutator_util::removeTBAAMetadata(M1.get());
     auto &DL = M1.get()->getDataLayout();
     loggerInit(0);
     deleteLog(0);
@@ -663,7 +663,7 @@ void copyMode() {
   llvm::LLVMContext context;
   std::shared_ptr<llvm::Module> pm = stubMutator.getModule();
   if (copyFunctions != 0) {
-    LLVMUtil::propagateFunctionsInModule(pm.get(), copyFunctions);
+    mutator_util::propagateFunctionsInModule(pm.get(), copyFunctions);
   }
   std::unique_ptr<Mutator> mutator = std::make_unique<ModuleMutator>(
       CloneModule(*pm), invalidFuncNameSet, verbose, onEveryFunction);
@@ -694,7 +694,7 @@ void timeMode() {
   llvm::LLVMContext context;
   std::shared_ptr<llvm::Module> pm = stubMutator.getModule();
   if (copyFunctions != 0) {
-    LLVMUtil::propagateFunctionsInModule(pm.get(), copyFunctions);
+    mutator_util::propagateFunctionsInModule(pm.get(), copyFunctions);
   }
   std::unique_ptr<Mutator> mutator = std::make_unique<ModuleMutator>(
       CloneModule(*pm), invalidFuncNameSet, verbose, onEveryFunction);
