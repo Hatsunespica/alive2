@@ -108,6 +108,19 @@ static void showStats() {
     IR::Memory::printAliasStats(*out);
 }
 
+static void emitCommandLine(ostream *out) {
+#ifdef __linux__
+  ifstream cmd_args("/proc/self/cmdline");
+  if (!cmd_args.is_open()) {
+    return;
+  }
+  *out << "Command line:";
+  std::string arg;
+  while (std::getline(cmd_args, arg, '\0'))
+    *out << " '" << arg << "'";
+  *out << "\n\n";
+#endif
+}
 
 struct TVLegacyPass final : public llvm::ModulePass {
   static char ID;
@@ -267,6 +280,8 @@ struct TVLegacyPass final : public llvm::ModulePass {
       has_failure |= errs.isUnsound();
       if (opt_error_fatal && has_failure)
         finalize();
+      if (errs.isUnsound())
+        emitCommandLine(out);
     } else {
       *out << "Transformation seems to be correct!\n\n";
     }
