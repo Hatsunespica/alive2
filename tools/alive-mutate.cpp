@@ -437,6 +437,9 @@ bool inputVerify() {
               r.status == Results::SYNTACTIC_EQ) {
             ++validFuncNum;
             valid = true;
+            if(fit->getLinkage()==llvm::GlobalValue::LinkageTypes::InternalLinkage){
+              fit->setLinkage(llvm::GlobalValue::CommonLinkage);
+            }
           }
         }
         if (!valid) {
