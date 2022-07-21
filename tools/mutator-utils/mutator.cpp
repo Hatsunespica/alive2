@@ -462,6 +462,35 @@ void FunctionMutator::removeTmpFunction(){
   }
 }
 
+static bool hasUndefOperand(llvm::Instruction* inst){
+  return std::any_of(inst->op_begin(),inst->op_end(),
+    [](llvm::Use& use){return llvm::isa<llvm::UndefValue>(use.get());});
+}
+
+void FunctionMutator::removeAllUndef(){
+  llvm::SmallVector<llvm::Value*> vec;
+  for(auto it=inst_begin(functionInTmp);it!=inst_end(functionInTmp);++it){
+    if(hasUndefOperand(&*it)){
+      vec.push_back(&*it);      
+    }
+  }
+  std::reverse(vec.begin(),vec.end());
+  while(!vec.empty()){
+    llvm::Instruction* inst=(llvm::Instruction*)vec.back();    
+    vec.pop_back();
+    llvm::SmallVector<size_t> pos;
+    for(size_t i=0;i<inst->getNumOperands();++i){
+      if(llvm::isa<llvm::UndefValue>(inst->getOperand(i))){
+        pos.push_back(i);
+      }
+    }
+    for(size_t i: pos){
+      setOperandRandomValue(inst,i);
+    }
+    fixAllValues(vec);
+  }
+}
+
 bool ModuleMutator::init() {
   for (auto fit = pm->begin(); fit != pm->end(); ++fit) {
     for (auto ait = fit->arg_begin(); ait != fit->arg_end(); ++ait) {
