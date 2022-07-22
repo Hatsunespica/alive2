@@ -141,10 +141,10 @@ void FunctionMutator::init(std::shared_ptr<FunctionMutator> self) {
     whenMoveToNextInstFuncs.push_back(helpers.size() - 1);
   }
 
-  if (RandomCodeInserterHelper::canMutate(currentFunction)) {
+  /*if (RandomCodeInserterHelper::canMutate(currentFunction)) {
     helpers.push_back(std::make_unique<RandomCodeInserterHelper>(self));
     whenMoveToNextInstFuncs.push_back(helpers.size() - 1);
-  }
+  }*/
 
   if (GEPHelper::canMutate(currentFunction)) {
     helpers.push_back(std::make_unique<GEPHelper>(self));
