@@ -117,167 +117,19 @@ version )EOF";
   return 0;
 }
 
-llvm::StringSet<> getRelatedFunctionNames(llvm::Function *func) {
-  llvm::StringSet<> result, queue;
-
-  llvm::Module *module = func->getParent();
-  llvm::StringMap<llvm::StringSet<>> edges;
-
-  for (auto fit = module->begin(); fit != module->end(); ++fit) {
-    edges.insert(std::make_pair(fit->getName(), llvm::StringSet<>()));
-  }
-
-  for (auto fit = module->begin(); fit != module->end(); ++fit) {
-    for (auto use_it = fit->use_begin(); use_it != fit->use_end(); ++use_it) {
-      llvm::User *user = use_it->getUser();
-      if (llvm::isa<llvm::Instruction>(user)) {
-        llvm::Function *userFunc = ((llvm::Instruction *)user)->getFunction();
-        assert(edges.find(userFunc->getName()) != edges.end() &&
-               "u node should be in the graph");
-        edges[userFunc->getName()].insert(fit->getName());
-      }
-    }
-  }
-
-  result.insert(func->getName());
-  queue.insert(func->getName());
-
-  while (!queue.empty()) {
-    llvm::StringRef str = queue.begin()->getKey();
-    llvm::Function *func = module->getFunction(str);
-
-    assert(func != nullptr && "func in BFS cannot be nullptr");
-    queue.erase(queue.begin());
-
-    llvm::StringSet<> &adjEdges = edges[func->getName()];
-    for (const auto &edge : adjEdges) {
-      if (!result.contains(edge.getKey())) {
-        queue.insert(edge.getKey());
-        result.insert(edge.getKey());
-      }
-    }
-  }
-  return result;
+llvm::Constant* updateIntegerSize(llvm::ConstantInt* constInt,llvm::IntegerType* newTy){
+  return llvm::ConstantInt::get(newTy,constInt->getValue());  
 }
 
-static void updateConstantExprsRecursively(
-    llvm::Use *use, llvm::ValueToValueMapTy &VMap,
-    llvm::SmallPtrSet<llvm::Constant *, 32> &ConstantExprVisited, llvm::Module* newModule) {
-  llvm::Constant *v = llvm::dyn_cast<llvm::Constant>(use->get());
-  if (v == nullptr) {
-    return;
-  }
-
-  if (!ConstantExprVisited.insert(v).second)
-    return;
-
-  SmallVector<std::pair<llvm::Constant *,llvm::Use&>, 16> Stack;
-  Stack.push_back({v,*use});
-
-  while (!Stack.empty()) {
-    auto p=Stack.pop_back_val();
-    llvm::Constant *C = p.first;
-    llvm::Use& U=p.second;
-    assert(U.get()==C&&"use should get right val");
-
-    // Check this constant expression, skip this for now
-    //if (const auto *CE = dyn_cast<ConstantExpr>(C))
-    //  CE;
-
-    if (const auto *GV = dyn_cast<GlobalValue>(C)) {
-      llvm::errs()<<"found GV\n";
-      GV->print(llvm::errs());
-      llvm::errs()<<"\nGV end\n";
-      // Global Values get visited separately, but we do need to make sure
-      // that the global value is in the correct module
-      if(auto it=VMap.find(GV);it!=VMap.end()){
-        llvm::errs()<<"Replaced with\n";
-        it->second->print(llvm::errs());
-        const auto *newGV = dyn_cast<GlobalValue>(it->second);
-        llvm::errs()<<"\n";
-        llvm::errs()<<(GV->getParent()==newModule)<<"\n";
-        llvm::errs()<<(newGV->getParent()==newModule)<<"\n";
-        llvm::errs()<<(newGV->getParent()==GV->getParent())<<"\n";
-        U.set(it->second);
-      }
-      continue;
-    }
-
-    // Visit all sub-expressions.
-    for (Use &U : C->operands()) {
-      auto *OpC = dyn_cast<Constant>(U);
-      if (!OpC)
-        continue;
-      if (!ConstantExprVisited.insert(OpC).second)
-        continue;
-      Stack.push_back({OpC,U});
-    }
-  }
+llvm::BinaryOperator* updateIntegerSize(llvm::BinaryOperator* oper, llvm::IntegerType* newTy){
+  return nullptr;
 }
 
-std::unique_ptr<llvm::Module>
-cloneModuleWithOnlyFunction(std::shared_ptr<llvm::Module> module,
-                            llvm::Function *func) {
-  llvm::StringSet<> result = getRelatedFunctionNames(func);
-  llvm::SmallVector<llvm::Function *> tmpFuncs;
-  for (auto fit = module->begin(); fit != module->end(); ++fit) {
-    if (!result.contains(fit->getName())) {
-      tmpFuncs.push_back(&*fit);
-    }
-  }
-
-  for (size_t i = 0; i < tmpFuncs.size(); ++i) {
-    tmpFuncs[i]->removeFromParent();
-  }
-
-  llvm::ValueToValueMapTy VMap;
-  llvm::SmallPtrSet<llvm::Constant*, 32> ConstantExprVisited;
-  std::unique_ptr<llvm::Module> newModule = llvm::CloneModule(*module, VMap);
-  llvm::Function* oldFunc=module->getFunction("_Z5funcBi");
-  llvm::Function* newFunc=newModule->getFunction("_Z5funcBi");
-  llvm::errs()<<oldFunc<<"old func\n";
-  llvm::errs()<<newFunc<<"new func\n";
-  llvm::errs()<<"AAA\n";
-  //llvm::errs()<<(VMap.find(oldFunc)->second==newFunc)<<"val test\n";
-
-  for (size_t i = 0; i < tmpFuncs.size(); ++i) {
-    module->getFunctionList().push_back(tmpFuncs[i]);
-  }
-
-  llvm::errs() << "Global\n";
-  for (auto glb_it = newModule->global_begin();
-       glb_it != newModule->global_end(); ++glb_it) {
-    glb_it->print(llvm::errs());
-    llvm::errs() << "\n";
-    glb_it->getInitializer()->print(llvm::errs());
-    llvm::errs() << "\nOper\n";
-    for (auto op_it = glb_it->op_begin(); op_it != glb_it->op_end(); ++op_it) {
-      llvm::Value *useVal = op_it->get();
-      useVal->print(llvm::errs());
-      updateConstantExprsRecursively(&*op_it,VMap,ConstantExprVisited,newModule.get());
-      llvm::errs() << "\n" << (llvm::isa<llvm::ConstantExpr>(&*useVal)) << "\n";
-    }
-    llvm::errs() << "\nOper end\n";
-  }
-  llvm::errs() << "Global end\n";
-
-  return newModule;
+llvm::Instruction* updateIntegerSize(llvm::Instruction* inst, llvm::IntegerType* newTy){
+  return nullptr;
 }
 
 void handle(std::shared_ptr<llvm::Module> ptr) {
 
-  for (auto fit = ptr->begin(); fit != ptr->end(); ++fit) {
-    std::unique_ptr<llvm::Module> newModule =
-        cloneModuleWithOnlyFunction(ptr, &*fit);
-    llvm::errs() << "veirfy result: " << verifyModule(*newModule, nullptr)
-                 << "AAAAAAAAAAAA\n";
-    verifyModule(*newModule, &llvm::errs());
-    for (auto glb_it = ptr->global_begin(); glb_it != ptr->global_end();
-         glb_it++) {
-      glb_it->print(llvm::errs());
-
-      llvm::errs() << "\n";
-    }
-    break;
-  }
+  
 }
