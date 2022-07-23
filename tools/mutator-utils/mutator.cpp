@@ -220,18 +220,21 @@ void FunctionMutator::mutate() {
     print();
   }
 
-  bool mutated = false;
+  bool mutated = false, canMutate = false;
   do {
     for (size_t i = 0; i < helpers.size(); ++i) {
-      if (helpers[i]->shouldMutate() && Random::getRandomBool()) {
-        helpers[i]->mutate();
-        mutated = true;
-        if (debug) {
-          helpers[i]->debug();
+      if (helpers[i]->shouldMutate()) {
+        canMutate = true;
+        if (Random::getRandomBool()) {
+          helpers[i]->mutate();
+          mutated = true;
+          if (debug) {
+            helpers[i]->debug();
+          }
         }
       }
     }
-  } while (!mutated);
+  } while (!mutated && canMutate);
 
   if (debug) {
     print();
