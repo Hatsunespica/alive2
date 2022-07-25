@@ -283,14 +283,20 @@ public:
 
     FnAttrs attrs;
     vector<ParamAttrs> param_attrs;
+
+    parse_fn_attrs(i, attrs);
+
+    if (auto op = dyn_cast<llvm::FPMathOperator>(&i)) {
+      if (op->hasNoNaNs())
+        attrs.set(FnAttrs::NNaN);
+    }
+
     if (!approx) {
-      auto [known, attrs0, params0, approx0] = known_call(i, TLI, *BB, args);
+      auto [known, approx0]
+        = known_call(i, TLI, *BB, args, std::move(attrs), param_attrs);
+      approx = approx0;
       if (known)
         RETURN_IDENTIFIER(std::move(known));
-
-      attrs       = std::move(attrs0);
-      param_attrs = std::move(params0);
-      approx      = approx0;
     }
 
     auto ty = llvm_type2alive(i.getType());
@@ -305,7 +311,8 @@ public:
       if (!iasm->canThrow())
         attrs.set(FnAttrs::NoThrow);
       call = make_unique<InlineAsm>(*ty, value_name(i), iasm->getAsmString(),
-                                    iasm->getConstraintString(), std::move(attrs));
+                                    iasm->getConstraintString(),
+                                    std::move(attrs));
     } else {
       if (!fn) // TODO: support indirect calls
         return error(i);
@@ -317,13 +324,6 @@ public:
     llvm::AttributeList attrs_callsite = i.getAttributes();
     llvm::AttributeList attrs_fndef = fn ? fn->getAttributes()
                                          : llvm::AttributeList();
-
-    parse_fn_attrs(i, attrs);
-
-    if (auto op = dyn_cast<llvm::FPMathOperator>(&i)) {
-      if (op->hasNoNaNs())
-        attrs.set(FnAttrs::NNaN);
-    }
 
     if (fn)
       call = make_unique<FnCall>(*ty, value_name(i),
@@ -1248,7 +1248,7 @@ public:
       case llvm::Attribute::ZExt:
         // TODO: not important for IR verification, but we should check that
         // they don't change
-        continue;
+        break;
 
       case llvm::Attribute::ByVal: {
         attrs.set(ParamAttrs::ByVal);
@@ -1258,55 +1258,55 @@ public:
 
         attrs.set(ParamAttrs::Align);
         attrs.align = max(attrs.align, DL().getABITypeAlignment(ty));
-        continue;
+        break;
       }
 
       case llvm::Attribute::NonNull:
         attrs.set(ParamAttrs::NonNull);
-        continue;
+        break;
 
       case llvm::Attribute::NoCapture:
         attrs.set(ParamAttrs::NoCapture);
-        continue;
+        break;
 
       case llvm::Attribute::ReadOnly:
         attrs.set(ParamAttrs::NoWrite);
-        continue;
+        break;
 
       case llvm::Attribute::WriteOnly:
         attrs.set(ParamAttrs::NoRead);
-        continue;
+        break;
 
       case llvm::Attribute::ReadNone:
         // TODO: can this pointer be freed?
         attrs.set(ParamAttrs::NoRead);
         attrs.set(ParamAttrs::NoWrite);
-        continue;
+        break;
 
       case llvm::Attribute::Dereferenceable:
         attrs.set(ParamAttrs::Dereferenceable);
         attrs.derefBytes = max(attrs.derefBytes,
                                llvmattr.getDereferenceableBytes());
-        continue;
+        break;
 
       case llvm::Attribute::DereferenceableOrNull:
         attrs.set(ParamAttrs::DereferenceableOrNull);
         attrs.derefOrNullBytes = max(attrs.derefOrNullBytes,
                                      llvmattr.getDereferenceableOrNullBytes());
-        continue;
+        break;
 
       case llvm::Attribute::Alignment:
         attrs.set(ParamAttrs::Align);
         attrs.align = max(attrs.align, llvmattr.getAlignment()->value());
-        continue;
+        break;
 
       case llvm::Attribute::NoUndef:
         attrs.set(ParamAttrs::NoUndef);
-        continue;
+        break;
 
       case llvm::Attribute::Returned:
         attrs.set(ParamAttrs::Returned);
-        continue;
+        break;
 
       default:
         // If it is call site, it should be added at approximation list
@@ -1414,6 +1414,15 @@ public:
         attrs.set(FnAttrs::NoFree);
         break;
 
+
+      case llvm::Attribute::AllocSize: {
+        attrs.set(FnAttrs::AllocSize);
+        auto args = llvmattr.getAllocSizeArgs();
+        attrs.allocsize_0 = args.first;
+        if (args.second)
+          attrs.allocsize_1 = *args.second;
+        break;
+      }
       case llvm::Attribute::NoReturn:
         attrs.set(FnAttrs::NoReturn);
         break;
@@ -1469,7 +1478,8 @@ public:
     reset_state(Fn);
 
     auto &attrs = Fn.getFnAttrs();
-    auto [param_attrs, approx] = llvm_implict_attrs(f, TLI, attrs);
+    vector<ParamAttrs> param_attrs;
+    (void)llvm_implict_attrs(f, TLI, attrs, param_attrs);
 
     llvm::AttributeList attrlist = f.getAttributes();
 
