@@ -2013,7 +2013,7 @@ FnCall::ByteAccessInfo FnCall::getByteAccessInfo() const {
     if (attr.has(decay<decltype(attr)>::type::DereferenceableOrNull))  \
       sz = gcd(sz, attr.derefOrNullBytes);                             \
     /* Without align, nothing is guaranteed about the bytesize */      \
-    sz = gcd(sz, retattr.align);                                       \
+    sz = gcd(sz, retattr.align ? retattr.align : 1);                                       \
     bytesize = bytesize ? gcd(bytesize, sz) : sz;                      \
   } while (0)
 
@@ -2157,31 +2157,27 @@ static void unpack_ret_ty (vector<Type*> &out_types, Type &ty) {
 
 static StateValue
 check_return_value(State &s, StateValue &&val, const Type &ty,
-                   const FnAttrs &attrs, bool is_ret_instr) {
-  if (ty.isPtrType() && is_ret_instr) {
-    Pointer p(s.getMemory(), val.value);
-    val.non_poison &= !p.isStackAllocated();
-    val.non_poison &= !p.isNocapture();
-  }
-
-  auto [UB, new_non_poison] = attrs.encode(s, val, ty);
+                   const FnAttrs &attrs,
+                   const vector<pair<Value*, ParamAttrs>> &args) {
+  auto [UB, new_non_poison] = attrs.encode(s, val, ty, args);
   s.addUB(std::move(UB));
   return { std::move(val.value), std::move(new_non_poison) };
 }
 
 static StateValue
 pack_return(State &s, Type &ty, vector<StateValue> &vals, const FnAttrs &attrs,
-            unsigned &idx) {
+            unsigned &idx, const vector<pair<Value*, ParamAttrs>> &args) {
   if (auto agg = ty.getAsAggregateType()) {
     vector<StateValue> vs;
     for (unsigned i = 0, e = agg->numElementsConst(); i != e; ++i) {
       if (!agg->isPadding(i))
-        vs.emplace_back(pack_return(s, agg->getChild(i), vals, attrs, idx));
+        vs.emplace_back(
+          pack_return(s, agg->getChild(i), vals, attrs, idx, args));
     }
     return agg->aggregateVals(vs);
   }
 
-  return check_return_value(s, std::move(vals[idx++]), ty, attrs, false);
+  return check_return_value(s, std::move(vals[idx++]), ty, attrs, args);
 }
 
 StateValue FnCall::toSMT(State &s) const {
@@ -2256,10 +2252,11 @@ StateValue FnCall::toSMT(State &s) const {
     s.addUB(expr(false));
 
   unsigned idx = 0;
-  auto ret = s.addFnCall(fnName_mangled.str(), std::move(inputs), std::move(ptr_inputs),
-                         out_types, attrs);
+  auto ret = s.addFnCall(fnName_mangled.str(), std::move(inputs),
+                         std::move(ptr_inputs), out_types, attrs);
 
-  return isVoid() ? StateValue() : pack_return(s, getType(), ret, attrs, idx);
+  return isVoid() ? StateValue()
+                  : pack_return(s, getType(), ret, attrs, idx, args);
 }
 
 expr FnCall::getTypeConstraints(const Function &f) const {
@@ -2819,18 +2816,26 @@ void Return::print(ostream &os) const {
 
 static StateValue
 check_ret_attributes(State &s, StateValue &&sv, const Type &t,
-                     const FnAttrs &attrs) {
+                     const FnAttrs &attrs,
+                     const vector<pair<Value*, ParamAttrs>> &args) {
   if (auto agg = t.getAsAggregateType()) {
     vector<StateValue> vals;
     for (unsigned i = 0, e = agg->numElementsConst(); i != e; ++i) {
       if (agg->isPadding(i))
         continue;
-      vals.emplace_back(
-        check_ret_attributes(s, agg->extract(sv, i), agg->getChild(i), attrs));
+      vals.emplace_back(check_ret_attributes(s, agg->extract(sv, i),
+                                             agg->getChild(i), attrs, args));
     }
     return agg->aggregateVals(vals);
   }
-  return check_return_value(s, std::move(sv), t, attrs, true);
+
+  if (t.isPtrType()) {
+    Pointer p(s.getMemory(), sv.value);
+    sv.non_poison &= !p.isStackAllocated();
+    sv.non_poison &= !p.isNocapture();
+  }
+
+  return check_return_value(s, std::move(sv), t, attrs, args);
 }
 
 static void eq_val_rec(State &s, const Type &t, const StateValue &a,
@@ -2856,7 +2861,13 @@ StateValue Return::toSMT(State &s) const {
     retval = s[*val];
 
   s.addUB(s.getMemory().checkNocapture());
-  retval = check_ret_attributes(s, std::move(retval), getType(), attrs);
+
+  vector<pair<Value*, ParamAttrs>> args;
+  for (auto &arg : s.getFn().getInputs()) {
+    args.emplace_back(const_cast<Value*>(&arg), ParamAttrs());
+  }
+
+  retval = check_ret_attributes(s, std::move(retval), getType(), attrs, args);
 
   if (attrs.has(FnAttrs::NoReturn))
     s.addUB(expr(false));
@@ -3124,7 +3135,7 @@ bool Malloc::canFree() const {
 }
 
 uint64_t Malloc::getAlign() const {
-  return align ? align : heap_block_alignment;
+  return attrs.align ? attrs.align : heap_block_alignment;
 }
 
 vector<Value*> Malloc::operands() const {
@@ -3145,11 +3156,7 @@ void Malloc::print(ostream &os) const {
     os << " = malloc ";
   else
     os << " = realloc " << *ptr << ", ";
-  os << *size;
-  if (align)
-    os << ", align " << align;
-  if (isNonNull)
-    os << ", nonnull";
+  os << *size << ',' << attrs;
 }
 
 StateValue Malloc::toSMT(State &s) const {
@@ -3163,13 +3170,14 @@ StateValue Malloc::toSMT(State &s) const {
   expr nullp = Pointer::mkNullPointer(m)();
   expr ret = expr::mkIf(allocated, p_new, nullp);
 
-  if (!ptr) {
-    if (isNonNull) {
-      s.addPre(std::move(allocated));
-      ret = p_new;
-    }
+  if (attrs.isNonNull()) {
     // TODO: In C++ we need to throw an exception if the allocation fails.
-  } else {
+    s.addPre(std::move(allocated));
+    allocated = true;
+    ret = p_new;
+  }
+
+  if (ptr) {
     auto &[p, np_ptr] = s.getAndAddUndefs(*ptr);
     s.addUB(np_ptr);
     check_can_store(s, p);
@@ -3196,10 +3204,9 @@ expr Malloc::getTypeConstraints(const Function &f) const {
 
 unique_ptr<Instr> Malloc::dup(Function &f, const string &suffix) const {
   return ptr
-    ? make_unique<Malloc>(getType(), getName() + suffix, *ptr, *size, isNonNull,
-                          align)
-    : make_unique<Malloc>(getType(), getName() + suffix, *size, isNonNull,
-                          align);
+    ? make_unique<Malloc>(getType(), getName() + suffix, *ptr, *size,
+                          FnAttrs(attrs))
+    : make_unique<Malloc>(getType(), getName() + suffix, *size, FnAttrs(attrs));
 }
 
 
@@ -3225,7 +3232,7 @@ Calloc::ByteAccessInfo Calloc::getByteAccessInfo() const {
 }
 
 uint64_t Calloc::getAlign() const {
-  return align ? align : heap_block_alignment;
+  return attrs.align ? attrs.align : heap_block_alignment;
 }
 
 vector<Value*> Calloc::operands() const {
@@ -3238,9 +3245,7 @@ void Calloc::rauw(const Value &what, Value &with) {
 }
 
 void Calloc::print(ostream &os) const {
-  os << getName() << " = calloc " << *num << ", " << *size;
-  if (align)
-    os << ", align " << align;
+  os << getName() << " = calloc " << *num << ", " << *size << ',' << attrs;
 }
 
 StateValue Calloc::toSMT(State &s) const {
@@ -3253,6 +3258,11 @@ StateValue Calloc::toSMT(State &s) const {
   auto &m = s.getMemory();
   auto [p, allocated] = m.alloc(size, getAlign(), Memory::MALLOC,
                                 np && nm.mul_no_uoverflow(sz), nonnull);
+
+  if (attrs.isNonNull()) {
+    s.addPre(std::move(allocated));
+    allocated = true;
+  }
 
   m.memset(p, { expr::mkUInt(0, 8), true }, size, getAlign(), {}, false);
 
@@ -3268,7 +3278,8 @@ expr Calloc::getTypeConstraints(const Function &f) const {
 }
 
 unique_ptr<Instr> Calloc::dup(Function &f, const string &suffix) const {
-  return make_unique<Calloc>(getType(), getName() + suffix, *num, *size);
+  return make_unique<Calloc>(getType(), getName() + suffix, *num, *size,
+                             FnAttrs(attrs));
 }
 
 
