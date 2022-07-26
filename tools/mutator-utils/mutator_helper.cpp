@@ -37,10 +37,10 @@ varSetEnd:
     }
     tmp.clear();
 
-    //landingPad has to be the first instruction in the block
-    while(!instIt->isTerminator() && llvm::isa<LandingPadInst>(&*instIt)){
+    // landingPad has to be the first instruction in the block
+    while (!instIt->isTerminator() && llvm::isa<LandingPadInst>(&*instIt)) {
       ++instIt;
-    }    
+    }
 
     for (; !instIt->isTerminator(); ++instIt) {
       bool flag = true;
@@ -146,14 +146,14 @@ bool MutateInstructionHelper::shouldMutate() {
   return !mutated && canMutate(&*mutator->iitInTmp);
 }
 
-void MutateInstructionHelper::debug(){
+void MutateInstructionHelper::debug() {
   if (!newAdded) {
     llvm::errs() << "\nReplaced with a existant usage\n";
   } else {
     llvm::errs() << "\nNew Inst added\n";
   }
   mutator->iitInTmp->print(llvm::errs());
-  llvm::errs()<<"\n";
+  llvm::errs() << "\n";
 }
 
 void MutateInstructionHelper::mutate() {
@@ -256,9 +256,8 @@ void MutateInstructionHelper::replaceRandomUsage(llvm::Instruction *inst) {
 bool MutateInstructionHelper::canMutate(llvm::Instruction *inst) {
   return
       // make sure at least one
-      std::any_of(
-          inst->op_begin(), inst->op_end(),
-          [](llvm::Use& use) { return canMutate(use.get()); }) &&
+      std::any_of(inst->op_begin(), inst->op_end(),
+                  [](llvm::Use &use) { return canMutate(use.get()); }) &&
       (inst->getNumOperands() - llvm::isa<CallBase>(*inst) > 0) &&
       !llvm::isa<llvm::LandingPadInst>(inst)
       // The ret value of CleanupRet Inst must be a CleanupPad, needs extra
@@ -308,7 +307,7 @@ void RandomMoveHelper::randomMoveInstruction(llvm::Instruction *inst) {
 
 void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction *inst) {
   size_t pos = 0, newPos, beginPos = 0;
-  auto beginIt=inst->getParent()->begin();
+  auto beginIt = inst->getParent()->begin();
   for (auto it = inst->getParent()->begin(); &*it != inst; ++it, ++pos)
     ;
   /**
@@ -319,15 +318,15 @@ void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction *inst) {
     for (llvm::Instruction *phiInst = &*beginIt;
          llvm::isa<llvm::PHINode>(phiInst);
          phiInst = phiInst->getNextNonDebugInstruction()) {
-      ++beginPos,++beginIt;
+      ++beginPos, ++beginIt;
     }
   }
-  if(!llvm::isa<llvm::LandingPadInst>(inst)){
-  for (llvm::Instruction *landingPad = &*beginIt;
+  if (!llvm::isa<llvm::LandingPadInst>(inst)) {
+    for (llvm::Instruction *landingPad = &*beginIt;
          llvm::isa<llvm::LandingPadInst>(landingPad);
          landingPad = landingPad->getNextNonDebugInstruction()) {
-      ++beginPos,++beginIt;
-    }    
+      ++beginPos, ++beginIt;
+    }
   }
   /*
    *  Current inst cannot move forward because current inst is not PHI inst,
@@ -396,7 +395,7 @@ void RandomMoveHelper::randomMoveInstructionBackward(llvm::Instruction *inst) {
   llvm::SmallVector<llvm::Value *> extraVals;
   extraVals.push_back(inst);
   extraVals.push_back(newPosInst);
-  for (size_t i = pos+1; i != newPos; ++i) {
+  for (size_t i = pos + 1; i != newPos; ++i) {
     ++newPosIt;
     newPosInst = &*newPosIt;
     extraVals[1] = newPosInst;
@@ -428,17 +427,17 @@ void RandomMoveHelper::debug() {
 // don't allow insert code at CatchPadInst.
 // don't allow insert code at CleanupPadInst.
 bool RandomCodeInserterHelper::shouldMutate() {
-  llvm::Instruction* inst= &*mutator->iitInTmp;
+  llvm::Instruction *inst = &*mutator->iitInTmp;
   return !generated && !llvm::isa<llvm::PHINode>(inst) &&
-      !llvm::isa<llvm::LandingPadInst>(inst)
-      && !llvm::isa<llvm::CatchPadInst>(inst) 
-      && !llvm::isa<llvm::CleanupPadInst>(inst);
+         !llvm::isa<llvm::LandingPadInst>(inst) &&
+         !llvm::isa<llvm::CatchPadInst>(inst) &&
+         !llvm::isa<llvm::CleanupPadInst>(inst);
 }
 
 void RandomCodeInserterHelper::debug() {
   llvm::errs() << "Code piece generated\n";
   mutator->iitInTmp->print(llvm::errs());
-  llvm::errs()<<"\n";
+  llvm::errs() << "\n";
 }
 
 void RandomCodeInserterHelper::mutate() {
@@ -563,7 +562,8 @@ bool VoidFunctionCallRemoveHelper::canMutate(llvm::Function *func) {
 }
 
 void VoidFunctionCallRemoveHelper::mutate() {
-  assert(llvm::isa<CallInst>(&*mutator->iitInTmp)&&"the void call has to be a call inst to be removed");
+  assert(llvm::isa<CallInst>(&*mutator->iitInTmp) &&
+         "the void call has to be a call inst to be removed");
   llvm::CallInst *callInst = (llvm::CallInst *)&*mutator->iitInTmp;
   llvm::Instruction *nextInst = callInst->getNextNonDebugInstruction();
   if (funcName.empty()) {
@@ -594,6 +594,8 @@ void FunctionAttributeHelper::init() {
   for (auto ait = func->arg_begin(); ait != func->arg_end(); ait++, index++) {
     if (ait->getType()->isPointerTy()) {
       ptrPos.push_back(index);
+    } else if (ait->getType()->isIntegerTy()) {
+      intPos.push_back(index);
     }
   }
 }
@@ -613,10 +615,23 @@ void FunctionAttributeHelper::init() {
     func->addParamAttr(index, attrName);                                       \
   }
 
+#define setFuncRetAttr(attrName, value)                                        \
+  if (func->hasRetAttribute(attrName)) {                                       \
+    func->removeRetAttr(attrName);                                             \
+  }                                                                            \
+  if (value) {                                                                 \
+    func->addRetAttr(attrName);                                                \
+  }
+
 void FunctionAttributeHelper::mutate() {
   updated = true;
   llvm::Function *func = mutator->currentFunction;
   setFuncAttr(llvm::Attribute::AttrKind::NoFree, Random::getRandomBool());
+  setFuncRetAttr(llvm::Attribute::AttrKind::ZExt, false);
+  setFuncRetAttr(llvm::Attribute::AttrKind::SExt, false);
+  setFuncRetAttr(Random::getRandomBool() ? llvm::Attribute::AttrKind::ZExt
+                                         : llvm::Attribute::AttrKind::SExt,
+                 Random::getRandomBool());
   for (size_t index : ptrPos) {
     setFuncParamAttr(index, llvm::Attribute::AttrKind::NoCapture,
                      Random::getRandomBool());
@@ -624,10 +639,19 @@ void FunctionAttributeHelper::mutate() {
     func->addDereferenceableParamAttr(index,
                                       1 << (Random::getRandomUnsigned() % 4));
   }
+  for (size_t index : intPos) {
+    setFuncParamAttr(index, llvm::Attribute::AttrKind::ZExt, false);
+    setFuncParamAttr(index, llvm::Attribute::AttrKind::SExt, false);
+    setFuncParamAttr(index,
+                     Random::getRandomBool() ? llvm::Attribute::AttrKind::ZExt
+                                             : llvm::Attribute::AttrKind::SExt,
+                     Random::getRandomBool());
+  }
 }
 
 #undef setFuncAttr
 #undef setFuncParamAttr
+#undef setFuncRetAttr
 
 void FunctionAttributeHelper::debug() {
   llvm::errs() << "FunctionAttributeHelper: Function attributes updated\n";
