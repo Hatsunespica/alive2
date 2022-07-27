@@ -1996,10 +1996,6 @@ pair<uint64_t, uint64_t> FnCall::getMaxAllocSize() const {
   return { UINT64_MAX, getAlign() };
 }
 
-bool FnCall::canFree() const {
-  return !hasAttribute(FnAttrs::NoFree);
-}
-
 uint64_t FnCall::getAlign() const {
   // FIXME: needs to query allocalign param attr
   return attrs.align ? attrs.align : heap_block_alignment;
@@ -2020,18 +2016,17 @@ uint64_t FnCall::getMaxAccessSize() const {
 }
 
 FnCall::ByteAccessInfo FnCall::getByteAccessInfo() const {
-  /* TODO: update to consider alloc function. e.g. old code:
-  DEFINE_AS_EMPTYACCESS(Malloc);
+  if (attrs.has(AllocKind::Uninitialized) || attrs.has(AllocKind::Free))
+    return {};
 
-  Calloc::ByteAccessInfo Calloc::getByteAccessInfo() const {
-  auto info = ByteAccessInfo::intOnly(1);
-  if (auto n = getInt(*num))
-    if (auto sz = getInt(*size)) {
-      info.byteSize = gcd(getAlign(), *n * *sz);
-    }
-  return info;
-}
-  */
+  // calloc style
+  if (attrs.has(AllocKind::Zeroed)) {
+    auto info = ByteAccessInfo::intOnly(1);
+    auto [alloc, align] = getMaxAllocSize();
+    if (alloc)
+      info.byteSize = gcd(alloc, align);
+    return info;
+  }
 
   // If bytesize is zero, this call does not participate in byte encoding.
   uint64_t bytesize = 0;
@@ -2051,11 +2046,11 @@ FnCall::ByteAccessInfo FnCall::getByteAccessInfo() const {
   auto &retattr = getAttributes();
   UPDATE(retattr);
 
-  for (auto &arg : args) {
-    if (!arg.first->getType().isPtrType())
+  for (auto &[arg, attrs] : args) {
+    if (!arg->getType().isPtrType())
       continue;
 
-    UPDATE(arg.second);
+    UPDATE(attrs);
     // Pointer arguments without dereferenceable attr don't contribute to the
     // byte size.
     // call f(* dereferenceable(n) align m %p, * %q) is equivalent to a dummy
@@ -2314,7 +2309,8 @@ StateValue FnCall::toSMT(State &s) const {
 
   if (attrs.has(AllocKind::Alloc) || attrs.has(AllocKind::Realloc)) {
     auto [size, np_size] = attrs.computeAllocSize(s, args);
-    expr nonnull = expr::mkBoolVar("malloc_never_fails");
+    expr nonnull = attrs.isNonNull() ? expr(true)
+                                     : expr::mkBoolVar("malloc_never_fails");
     // FIXME: alloc-family below
     auto [p_new, allocated]
       = m.alloc(size, getAlign(), Memory::MALLOC, np_size, nonnull);
@@ -2322,12 +2318,7 @@ StateValue FnCall::toSMT(State &s) const {
     expr nullp = Pointer::mkNullPointer(m)();
     expr ret = expr::mkIf(allocated, p_new, nullp);
 
-    if (attrs.isNonNull()) {
-      // TODO: In C++ we need to throw an exception if the allocation fails.
-      s.addPre(std::move(allocated));
-      allocated = true;
-      ret = p_new;
-    }
+    // TODO: In C++ we need to throw an exception if the allocation fails.
 
     if (attrs.has(AllocKind::Realloc)) {
       auto &[allocptr, np_ptr] = s.getAndAddUndefs(get_alloc_ptr());
@@ -3143,7 +3134,6 @@ MemInstr::ByteAccessInfo MemInstr::ByteAccessInfo::full(unsigned byteSize) {
 DEFINE_AS_RETZERO(Alloc, getMaxAccessSize);
 DEFINE_AS_RETZERO(Alloc, getMaxGEPOffset);
 DEFINE_AS_EMPTYACCESS(Alloc);
-DEFINE_AS_RETFALSE(Alloc, canFree);
 
 pair<uint64_t, uint64_t> Alloc::getMaxAllocSize() const {
   if (auto bytes = getInt(*size)) {
@@ -3219,7 +3209,6 @@ DEFINE_AS_RETZEROALIGN(StartLifetime, getMaxAllocSize);
 DEFINE_AS_RETZERO(StartLifetime, getMaxAccessSize);
 DEFINE_AS_RETZERO(StartLifetime, getMaxGEPOffset);
 DEFINE_AS_EMPTYACCESS(StartLifetime);
-DEFINE_AS_RETFALSE(StartLifetime, canFree);
 
 vector<Value*> StartLifetime::operands() const {
   return { ptr };
@@ -3257,10 +3246,6 @@ vector<Value*> EndLifetime::operands() const {
   return { ptr };
 }
 
-bool EndLifetime::canFree() const {
-  return true;
-}
-
 void EndLifetime::rauw(const Value &what, Value &with) {
   RAUW(ptr);
 }
@@ -3291,7 +3276,6 @@ void GEP::addIdx(uint64_t obj_size, Value &idx) {
 DEFINE_AS_RETZEROALIGN(GEP, getMaxAllocSize);
 DEFINE_AS_RETZERO(GEP, getMaxAccessSize);
 DEFINE_AS_EMPTYACCESS(GEP);
-DEFINE_AS_RETFALSE(GEP, canFree);
 
 static unsigned off_used_bits(const Value &v) {
   if (auto c = isCast(ConversionOp::SExt, v))
@@ -3433,7 +3417,6 @@ unique_ptr<Instr> GEP::dup(Function &f, const string &suffix) const {
 
 DEFINE_AS_RETZEROALIGN(Load, getMaxAllocSize);
 DEFINE_AS_RETZERO(Load, getMaxGEPOffset);
-DEFINE_AS_RETFALSE(Load, canFree);
 
 uint64_t Load::getMaxAccessSize() const {
   return Memory::getStoreByteSize(getType());
@@ -3476,7 +3459,6 @@ unique_ptr<Instr> Load::dup(Function &f, const string &suffix) const {
 
 DEFINE_AS_RETZEROALIGN(Store, getMaxAllocSize);
 DEFINE_AS_RETZERO(Store, getMaxGEPOffset);
-DEFINE_AS_RETFALSE(Store, canFree);
 
 uint64_t Store::getMaxAccessSize() const {
   return Memory::getStoreByteSize(val->getType());
@@ -3526,7 +3508,6 @@ unique_ptr<Instr> Store::dup(Function &f, const string &suffix) const {
 
 DEFINE_AS_RETZEROALIGN(Memset, getMaxAllocSize);
 DEFINE_AS_RETZERO(Memset, getMaxGEPOffset);
-DEFINE_AS_RETFALSE(Memset, canFree);
 
 uint64_t Memset::getMaxAccessSize() const {
   return getIntOr(*bytes, UINT64_MAX);
@@ -3588,7 +3569,6 @@ unique_ptr<Instr> Memset::dup(Function &f, const string &suffix) const {
 
 DEFINE_AS_RETZEROALIGN(FillPoison, getMaxAllocSize);
 DEFINE_AS_RETZERO(FillPoison, getMaxGEPOffset);
-DEFINE_AS_RETFALSE(FillPoison, canFree);
 
 uint64_t FillPoison::getMaxAccessSize() const {
   return getGlobalVarSize(ptr);
@@ -3628,7 +3608,6 @@ unique_ptr<Instr> FillPoison::dup(Function &f, const string &suffix) const {
 
 DEFINE_AS_RETZEROALIGN(Memcpy, getMaxAllocSize);
 DEFINE_AS_RETZERO(Memcpy, getMaxGEPOffset);
-DEFINE_AS_RETFALSE(Memcpy, canFree);
 
 uint64_t Memcpy::getMaxAccessSize() const {
   return getIntOr(*bytes, UINT64_MAX);
@@ -3705,7 +3684,6 @@ unique_ptr<Instr> Memcpy::dup(Function &f, const string &suffix) const {
 
 DEFINE_AS_RETZEROALIGN(Memcmp, getMaxAllocSize);
 DEFINE_AS_RETZERO(Memcmp, getMaxGEPOffset);
-DEFINE_AS_RETFALSE(Memcmp, canFree);
 
 uint64_t Memcmp::getMaxAccessSize() const {
   return getIntOr(*num, UINT64_MAX);
@@ -3820,7 +3798,6 @@ unique_ptr<Instr> Memcmp::dup(Function &f, const string &suffix) const {
 
 DEFINE_AS_RETZEROALIGN(Strlen, getMaxAllocSize);
 DEFINE_AS_RETZERO(Strlen, getMaxGEPOffset);
-DEFINE_AS_RETFALSE(Strlen, canFree);
 
 uint64_t Strlen::getMaxAccessSize() const {
   return getGlobalVarSize(ptr);
