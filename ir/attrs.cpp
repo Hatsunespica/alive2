@@ -169,11 +169,20 @@ uint64_t ParamAttrs::getDerefBytes() const {
   return bytes;
 }
 
+void ParamAttrs::merge(const ParamAttrs &other) {
+  bits            |= other.bits;
+  derefBytes       = max(derefBytes, other.derefBytes);
+  derefOrNullBytes = max(derefOrNullBytes, other.derefOrNullBytes);
+  blockSize        = max(blockSize, other.blockSize);
+  align            = max(align, other.align);
+}
+
 static expr
 encodePtrAttrs(State &s, const expr &ptrvalue, uint64_t derefBytes,
                uint64_t derefOrNullBytes, uint64_t align, bool nonnull,
                bool nocapture, const expr &deref_expr) {
-  Pointer p(s.getMemory(), ptrvalue);
+  auto &m = s.getMemory();
+  Pointer p(m, ptrvalue);
   expr non_poison(true);
 
   if (nonnull)
@@ -184,13 +193,17 @@ encodePtrAttrs(State &s, const expr &ptrvalue, uint64_t derefBytes,
   if (derefBytes || derefOrNullBytes || deref_expr.isValid()) {
     // dereferenceable, byval (ParamAttrs), dereferenceable_or_null
     if (derefBytes)
-      s.addUB(p.isDereferenceable(derefBytes, align));
+      s.addUB(Pointer(m, ptrvalue).isDereferenceable(derefBytes, align));
     if (derefOrNullBytes)
-      s.addUB(p.isDereferenceable(derefOrNullBytes, align)() || p.isNull());
+      s.addUB(
+        Pointer(m, ptrvalue).isDereferenceable(derefOrNullBytes, align)() ||
+        p.isNull());
     if (deref_expr.isValid())
-      s.addUB(p.isDereferenceable(deref_expr, align, false)() || p.isNull());
+      s.addUB(
+        Pointer(m, ptrvalue).isDereferenceable(deref_expr, align, false)() ||
+        p.isNull());
   } else if (align > 1)
-    non_poison &= p.isAligned(align);
+    non_poison &= Pointer(m, ptrvalue).isAligned(align);
 
   // TODO: handle alloc align
 
@@ -223,6 +236,12 @@ FnAttrs::computeAllocSize(State &s,
   expr allocsize = arg0.value.zextOrTrunc(bits_size_t);
   expr np_size   = arg0.non_poison;
 
+  auto check_trunc = [&](const expr &var) {
+    if (var.bits() > bits_size_t)
+      np_size &= var.extract(var.bits()-1, bits_size_t) == 0;
+  };
+  check_trunc(arg0.value);
+
   if (allocsize_1 != -1u) {
     auto &arg1 = s[*args[allocsize_1].first];
     s.addUB(arg1.non_poison);
@@ -231,6 +250,7 @@ FnAttrs::computeAllocSize(State &s,
     np_size  &= arg1.non_poison;
     np_size  &= allocsize.mul_no_uoverflow(v);
     allocsize = allocsize * v;
+    check_trunc(arg1.value);
   }
   return { std::move(allocsize), std::move(np_size) };
 }
