@@ -125,7 +125,9 @@ class RandomMoveHelper : public MutationHelper {
   void randomMoveInstruction(llvm::Instruction *inst);
   void randomMoveInstructionForward(llvm::Instruction *inst);
   void randomMoveInstructionBackward(llvm::Instruction *inst);
-
+  static bool isPadInstruction(llvm::Instruction* inst){
+    return llvm::isa<llvm::LandingPadInst>(inst) || llvm::isa<llvm::CleanupPadInst>(inst)||llvm::isa<llvm::CatchPadInst>(inst);
+  }
 public:
   RandomMoveHelper(std::shared_ptr<FunctionMutator> mutator)
       : MutationHelper(mutator), moved(false){};

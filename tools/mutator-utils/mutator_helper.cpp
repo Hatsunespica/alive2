@@ -272,7 +272,7 @@ bool MutateInstructionHelper::canMutate(llvm::Instruction *inst) {
 bool RandomMoveHelper::shouldMutate() {
   return !moved && mutator->bitInTmp->size() > 2 &&
          !mutator->iitInTmp->isTerminator() &&
-         !llvm::isa<llvm::LandingPadInst>(&*mutator->iitInTmp);
+         !isPadInstruction(&*mutator->iitInTmp);
 }
 
 bool RandomMoveHelper::canMutate(llvm::Function *func) {
@@ -312,7 +312,7 @@ void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction *inst) {
     ;
   /**
    * PHINode must be the first inst in the basic block.
-   * LandingPad must be the first inst in the block
+   * pad inst must be the first inst in the block
    */
   if (!llvm::isa<llvm::PHINode>(inst)) {
     for (llvm::Instruction *phiInst = &*beginIt;
@@ -321,10 +321,10 @@ void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction *inst) {
       ++beginPos, ++beginIt;
     }
   }
-  if (!llvm::isa<llvm::LandingPadInst>(inst)) {
-    for (llvm::Instruction *landingPad = &*beginIt;
-         llvm::isa<llvm::LandingPadInst>(landingPad);
-         landingPad = landingPad->getNextNonDebugInstruction()) {
+  if (!isPadInstruction(inst)) {
+    for (llvm::Instruction *padInst = &*beginIt;
+         isPadInstruction(padInst);
+         padInst = padInst->getNextNonDebugInstruction()) {
       ++beginPos, ++beginIt;
     }
   }
@@ -594,8 +594,6 @@ void FunctionAttributeHelper::init() {
   for (auto ait = func->arg_begin(); ait != func->arg_end(); ait++, index++) {
     if (ait->getType()->isPointerTy()) {
       ptrPos.push_back(index);
-    } else if (ait->getType()->isIntegerTy()) {
-      intPos.push_back(index);
     }
   }
 }
@@ -615,25 +613,10 @@ void FunctionAttributeHelper::init() {
     func->addParamAttr(index, attrName);                                       \
   }
 
-#define setFuncRetAttr(attrName, value)                                        \
-  if (func->hasRetAttribute(attrName)) {                                       \
-    func->removeRetAttr(attrName);                                             \
-  }                                                                            \
-  if (value) {                                                                 \
-    func->addRetAttr(attrName);                                                \
-  }
-
 void FunctionAttributeHelper::mutate() {
   updated = true;
   llvm::Function *func = mutator->currentFunction;
   setFuncAttr(llvm::Attribute::AttrKind::NoFree, Random::getRandomBool());
-  if(func->getReturnType()->isIntegerTy()){
-    setFuncRetAttr(llvm::Attribute::AttrKind::ZExt, false);
-    setFuncRetAttr(llvm::Attribute::AttrKind::SExt, false);
-    setFuncRetAttr(Random::getRandomBool() ? llvm::Attribute::AttrKind::ZExt
-                                          : llvm::Attribute::AttrKind::SExt,
-                  Random::getRandomBool());
-  }
   for (size_t index : ptrPos) {
     setFuncParamAttr(index, llvm::Attribute::AttrKind::NoCapture,
                      Random::getRandomBool());
@@ -641,19 +624,10 @@ void FunctionAttributeHelper::mutate() {
     func->addDereferenceableParamAttr(index,
                                       1 << (Random::getRandomUnsigned() % 4));
   }
-  for (size_t index : intPos) {
-    setFuncParamAttr(index, llvm::Attribute::AttrKind::ZExt, false);
-    setFuncParamAttr(index, llvm::Attribute::AttrKind::SExt, false);
-    setFuncParamAttr(index,
-                     Random::getRandomBool() ? llvm::Attribute::AttrKind::ZExt
-                                             : llvm::Attribute::AttrKind::SExt,
-                     Random::getRandomBool());
-  }
 }
 
 #undef setFuncAttr
 #undef setFuncParamAttr
-#undef setFuncRetAttr
 
 void FunctionAttributeHelper::debug() {
   llvm::errs() << "FunctionAttributeHelper: Function attributes updated\n";
