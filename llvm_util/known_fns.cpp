@@ -13,14 +13,12 @@
 using namespace IR;
 using namespace std;
 
-namespace llvm_util {
-
 #define RETURN_EXACT()  return false
 #define RETURN_APPROX() return true
 
-bool implict_attrs_(llvm::LibFunc libfn, FnAttrs &attrs,
-                    vector<ParamAttrs> &param_attrs, bool is_void,
-                    unsigned num_args) {
+static bool implict_attrs_(llvm::LibFunc libfn, FnAttrs &attrs,
+                           vector<ParamAttrs> &param_attrs, bool is_void,
+                           const vector<Value*> &args) {
   auto set_param = [&](unsigned i, ParamAttrs::Attribute attr) {
     if (param_attrs.size() <= i)
       param_attrs.resize(i+1);
@@ -35,26 +33,132 @@ bool implict_attrs_(llvm::LibFunc libfn, FnAttrs &attrs,
   auto ret_and_args_no_undef = [&]() {
     if (!is_void)
       attrs.set(FnAttrs::NoUndef);
-    for (unsigned i = 0; i < num_args; ++i) {
+    for (unsigned i = 0, e = args.size(); i < e; ++i) {
       set_param(i, ParamAttrs::NoUndef);
     }
   };
 
-  switch (libfn) {
-  case llvm::LibFunc_calloc:
-    attrs.allocsize_1 = 1;
-    [[fallthrough]];
+  auto set_align = [&](uint64_t align) {
+    attrs.align = max(attrs.align, align);
+  };
 
-  case llvm::LibFunc_malloc:
-  case llvm::LibFunc_vec_calloc:
+  auto alloc_fns = [&](unsigned idx1, unsigned idx2 = -1u) {
     ret_and_args_no_undef();
     attrs.set(FnAttrs::InaccessibleMemOnly);
     attrs.set(FnAttrs::NoAlias);
-    attrs.set(FnAttrs::NoThrow);
-    attrs.set(FnAttrs::NoFree);
     attrs.set(FnAttrs::WillReturn);
     attrs.set(FnAttrs::AllocSize);
-    attrs.allocsize_0 = 0;
+    attrs.allocsize_0 = idx1;
+    attrs.allocsize_1 = idx2;
+    attrs.derefOrNullBytes = getIntOr(*args[idx1], 0);
+    if (idx2 != -1u)
+      attrs.derefOrNullBytes *= getIntOr(*args[idx2], 0);
+    if (attrs.derefOrNullBytes > 0)
+      attrs.set(FnAttrs::DereferenceableOrNull);
+  };
+
+  switch (libfn) {
+  case llvm::LibFunc_valloc:
+    set_align(4096); // page size
+    [[fallthrough]];
+  case llvm::LibFunc_malloc:
+    alloc_fns(0);
+    attrs.set(FnAttrs::NoThrow);
+    attrs.set(FnAttrs::NoFree);
+    attrs.allocfamily = "malloc";
+    attrs.add(AllocKind::Alloc);
+    attrs.add(AllocKind::Uninitialized);
+    RETURN_EXACT();
+
+  case llvm::LibFunc_aligned_alloc:
+  case llvm::LibFunc_memalign:
+    alloc_fns(1);
+    attrs.set(FnAttrs::NoThrow);
+    attrs.set(FnAttrs::NoFree);
+    attrs.allocfamily = "malloc";
+    attrs.add(AllocKind::Alloc);
+    attrs.add(AllocKind::Uninitialized);
+    set_param(0, ParamAttrs::AllocAlign);
+    RETURN_EXACT();
+
+  case llvm::LibFunc_calloc:
+    alloc_fns(0, 1);
+    attrs.set(FnAttrs::NoThrow);
+    attrs.set(FnAttrs::NoFree);
+    attrs.allocfamily = "malloc";
+    attrs.add(AllocKind::Alloc);
+    attrs.add(AllocKind::Zeroed);
+    RETURN_EXACT();
+
+  case llvm::LibFunc_realloc:
+  case llvm::LibFunc_reallocf:
+    alloc_fns(1);
+    attrs.set(FnAttrs::NoThrow);
+    attrs.allocfamily = "malloc";
+    attrs.add(AllocKind::Realloc);
+    attrs.add(AllocKind::Uninitialized);
+    set_param(0, ParamAttrs::AllocPtr);
+    set_param(0, ParamAttrs::NoCapture);
+    RETURN_EXACT();
+
+  case llvm::LibFunc_free:
+    ret_and_args_no_undef();
+    attrs.set(FnAttrs::InaccessibleMemOnly);
+    attrs.set(FnAttrs::NoThrow);
+    attrs.set(FnAttrs::WillReturn);
+    attrs.allocfamily = "malloc";
+    attrs.add(AllocKind::Free);
+    set_param(0, ParamAttrs::AllocPtr);
+    RETURN_EXACT();
+
+  case llvm::LibFunc_Znwj: // new(unsigned int)
+  case llvm::LibFunc_Znwm: // new(unsigned long)
+    alloc_fns(0);
+    attrs.set(FnAttrs::NoFree);
+    attrs.allocfamily = "_Znwm";
+    attrs.add(AllocKind::Alloc);
+    attrs.add(AllocKind::Uninitialized);
+    RETURN_EXACT();
+
+  case llvm::LibFunc_vec_malloc:
+    alloc_fns(0);
+    attrs.set(FnAttrs::NoThrow);
+    attrs.set(FnAttrs::NoFree);
+    attrs.allocfamily = "vecmalloc";
+    attrs.add(AllocKind::Alloc);
+    attrs.add(AllocKind::Uninitialized);
+    set_align(16);
+    RETURN_EXACT();
+
+  case llvm::LibFunc_vec_calloc:
+    alloc_fns(0, 1);
+    attrs.set(FnAttrs::NoThrow);
+    attrs.set(FnAttrs::NoFree);
+    attrs.allocfamily = "vecmalloc";
+    attrs.add(AllocKind::Alloc);
+    attrs.add(AllocKind::Zeroed);
+    set_align(16);
+    RETURN_EXACT();
+
+  case llvm::LibFunc_vec_realloc:
+    alloc_fns(1);
+    attrs.set(FnAttrs::NoThrow);
+    attrs.allocfamily = "vecmalloc";
+    attrs.add(AllocKind::Realloc);
+    attrs.add(AllocKind::Uninitialized);
+    set_param(0, ParamAttrs::AllocPtr);
+    set_param(0, ParamAttrs::NoCapture);
+    set_align(16);
+    RETURN_EXACT();
+
+  case llvm::LibFunc_vec_free:
+    ret_and_args_no_undef();
+    attrs.set(FnAttrs::InaccessibleMemOnly);
+    attrs.set(FnAttrs::NoThrow);
+    attrs.set(FnAttrs::WillReturn);
+    attrs.allocfamily = "vecmalloc";
+    attrs.add(AllocKind::Free);
+    set_param(0, ParamAttrs::AllocPtr);
     RETURN_EXACT();
 
   case llvm::LibFunc_fwrite:
@@ -386,13 +490,16 @@ bool implict_attrs_(llvm::LibFunc libfn, FnAttrs &attrs,
   }
 }
 
+namespace llvm_util {
+
 bool llvm_implict_attrs(llvm::Function &f, const llvm::TargetLibraryInfo &TLI,
-                        FnAttrs &attrs, vector<ParamAttrs> &param_attrs) {
+                        FnAttrs &attrs, vector<ParamAttrs> &param_attrs,
+                        const vector<Value*> &args) {
   llvm::LibFunc libfn;
   if (!TLI.getLibFunc(f, libfn) || !TLI.has(libfn))
     return false;
   return implict_attrs_(libfn, attrs, param_attrs,
-                        f.getReturnType()->isVoidTy(), f.arg_size());
+                        f.getReturnType()->isVoidTy(), args);
 }
 
 #undef RETURN_EXACT
@@ -412,45 +519,6 @@ known_call(llvm::CallInst &i, const llvm::TargetLibraryInfo &TLI,
     RETURN_EXACT();
 
   auto decl = i.getCalledFunction();
-
-  // TODO: add support for checking mismatch of C vs C++ alloc fns
-  if (llvm::isMallocOrCallocLikeFn(&i, &TLI)) {
-    // aligned malloc
-    if (auto *algn = llvm::getAllocAlignment(&i, &TLI)) {
-      if (auto algnint = dyn_cast<llvm::ConstantInt>(algn)) {
-        attrs.align = algnint->getZExtValue();
-        attrs.allocsize_0 = 0;
-        RETURN_VAL(
-          make_unique<Malloc>(*ty, value_name(i), *args[1], std::move(attrs)));
-      } else {
-        // TODO: add support for non-const alignments
-        RETURN_APPROX();
-      }
-    }
-
-    // calloc
-    if (decl && decl->getName() == "calloc")
-      RETURN_VAL(make_unique<Calloc>(*ty, value_name(i), *args[0], *args[1],
-                                     std::move(attrs)));
-
-    // malloc or new
-    RETURN_VAL(
-      make_unique<Malloc>(*ty, value_name(i), *args[0], std::move(attrs)));
-  }
-  if (llvm::getReallocatedOperand(&i, &TLI)) {
-    // TODO: allow other args
-    RETURN_VAL(make_unique<Malloc>(*ty, value_name(i), *args[0], *args[1],
-                                   std::move(attrs)));
-  }
-  if (llvm::getFreedOperand(&i, &TLI)) {
-    if (i.hasFnAttr(llvm::Attribute::NoFree)) {
-      auto zero = make_intconst(0, 1);
-      RETURN_VAL(make_unique<Assume>(*zero, Assume::AndNonPoison));
-    }
-    // TODO: allow other args
-    RETURN_VAL(make_unique<Free>(*args[0]));
-  }
-
   llvm::LibFunc libfn;
   if (!decl || !TLI.getLibFunc(*decl, libfn) || !TLI.has(libfn))
     RETURN_EXACT();
@@ -554,16 +622,18 @@ known_call(llvm::CallInst &i, const llvm::TargetLibraryInfo &TLI,
       // (void)fwrite(const void *ptr, 1, 1, FILE *stream) ->
       //   (void)fputc(int c, FILE *stream))
       if (bytes == 1 && i.use_empty() && TLI.has(llvm::LibFunc_fputc)) {
-        (void)implict_attrs_(llvm::LibFunc_fputc, attrs, param_attrs, false, 2);
         auto &byteTy = get_int_type(8); // FIXME
         auto &i32 = get_int_type(32);
-        auto call
-          = make_unique<FnCall>(i32, value_name(i), "@fputc", std::move(attrs));
         auto load
           = make_unique<Load>(byteTy, value_name(i) + "#load", *args[0], 1);
         auto load_zext
            = make_unique<ConversionOp>(i32, value_name(i) + "#zext", *load,
                                        ConversionOp::ZExt);
+
+        ENSURE(!implict_attrs_(llvm::LibFunc_fputc, attrs, param_attrs, false,
+                               {load_zext.get(), args[3]}));
+        auto call
+          = make_unique<FnCall>(i32, value_name(i), "@fputc", std::move(attrs));
         call->addArg(*load_zext, std::move(param_attrs[0]));
         call->addArg(*args[3], std::move(param_attrs[1]));
         BB.addInstr(std::move(load));
@@ -577,7 +647,7 @@ known_call(llvm::CallInst &i, const llvm::TargetLibraryInfo &TLI,
     break;
   }
 
-  return { nullptr, llvm_implict_attrs(*decl, TLI, attrs, param_attrs) };
+  return { nullptr, llvm_implict_attrs(*decl, TLI, attrs, param_attrs, args) };
 }
 
 }
