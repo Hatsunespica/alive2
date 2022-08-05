@@ -38,7 +38,7 @@ varSetEnd:
     tmp.clear();
 
     // landingPad has to be the first instruction in the block
-    while (!instIt->isTerminator() && llvm::isa<LandingPadInst>(&*instIt)) {
+    while (!instIt->isTerminator() && mutator_util::isPadInstruction(&*instIt)) {
       ++instIt;
     }
 
@@ -272,7 +272,7 @@ bool MutateInstructionHelper::canMutate(llvm::Instruction *inst) {
 bool RandomMoveHelper::shouldMutate() {
   return !moved && mutator->bitInTmp->size() > 2 &&
          !mutator->iitInTmp->isTerminator() &&
-         !isPadInstruction(&*mutator->iitInTmp);
+         !mutator_util::isPadInstruction(&*mutator->iitInTmp);
 }
 
 bool RandomMoveHelper::canMutate(llvm::Function *func) {
@@ -321,9 +321,9 @@ void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction *inst) {
       ++beginPos, ++beginIt;
     }
   }
-  if (!isPadInstruction(inst)) {
+  if (!mutator_util::isPadInstruction(inst)) {
     for (llvm::Instruction *padInst = &*beginIt;
-         isPadInstruction(padInst);
+         mutator_util::isPadInstruction(padInst);
          padInst = padInst->getNextNonDebugInstruction()) {
       ++beginPos, ++beginIt;
     }
