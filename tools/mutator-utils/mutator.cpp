@@ -224,12 +224,14 @@ void FunctionMutator::mutate() {
   if (debug) {
     print();
   }
+
+
   bool mutated = false, canMutate = false;
   do {
     for (size_t i = 0; i < helpers.size(); ++i) {
       if (helpers[i]->shouldMutate()) {
         canMutate = true;
-        if (true||Random::getRandomBool()) {
+        if (Random::getRandomBool()) {
           helpers[i]->mutate();
           mutated = true;
           if (debug) {
@@ -407,8 +409,14 @@ llvm::Value *FunctionMutator::getRandomDominatedValue(llvm::Type *ty) {
         return &*vMap[domVals[pos]];
       } else if (isIntTy && domVals[pos]->getType()->isIntegerTy()) {
         llvm::Value *valInTmp = &*vMap[domVals[pos]];
+        llvm::Instruction* insertBefore=nullptr;
+        if(llvm::isa<llvm::Argument>(valInTmp)){
+          insertBefore=&*functionInTmp->begin()->begin();
+        }else{
+          insertBefore=&*iitInTmp;
+        }
         return mutator_util::updateIntegerSize(
-            valInTmp, (llvm::IntegerType *)ty, &*iitInTmp);
+            valInTmp, (llvm::IntegerType *)ty, &*insertBefore);
       }
     }
   }

@@ -8,12 +8,13 @@ This category is for bugs that generating wrong codes from passes
 6. arm64 miscompile due to global isel (https://github.com/llvm/llvm-project/issues/55129)
 7. arm64, x86, and x86-64 miscompile from undef and urem (https://github.com/llvm/llvm-project/issues/55271)
 8. or+and miscompile with global isel on arm64 (https://github.com/llvm/llvm-project/issues/55284)
-9. [Open] urem+udiv miscompile with global isel on arm64(https://github.com/llvm/llvm-project/issues/55287)
+9. urem+udiv miscompile with global isel on arm64(https://github.com/llvm/llvm-project/issues/55287)
 10. fshl-related miscompile by arm64 and x86-64 backends(https://github.com/llvm/llvm-project/issues/55296)
 11. arm64 miscompile (https://github.com/llvm/llvm-project/issues/55342)
 12. miscompile from multiple backends (https://github.com/llvm/llvm-project/issues/55484)
 13. miscompile from arm64 backend with (icmp ult (sub -6, -8) 3) (https://github.com/llvm/llvm-project/issues/55490)
 14. shift/zext-related miscompile by aarch64 backend (https://github.com/llvm/llvm-project/issues/55833)
+15. possible zext-related miscompile with global isel on AArch64 (https://github.com/llvm/llvm-project/issues/56733)
 
 ## Category 2
 This category is for bugs that crashes
@@ -21,7 +22,7 @@ This category is for bugs that crashes
 2. newGVN crashes (https://bugs.llvm.org/show_bug.cgi?id=51618)
 3. VectorCombine crashes(https://github.com/llvm/llvm-project/issues/56377)
 4. InstCombine Crashes(https://github.com/llvm/llvm-project/issues/56463)
-5. CoroInst crashes (https://github.com/llvm/llvm-project/issues/56525)
+5. InstCombine crashes (https://github.com/llvm/llvm-project/issues/56945)
 
 ## Category 3
 This category is for that the test file is originaly wrong
