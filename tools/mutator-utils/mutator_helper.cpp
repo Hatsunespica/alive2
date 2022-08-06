@@ -788,3 +788,160 @@ void BinaryInstructionHelper::debug() {
   llvm::errs() << "\n";
   mutator->iitInTmp->getParent()->print(llvm::errs());
 }
+
+bool ResizeIntegerHelper::isValidNode(llvm::Value *val) {
+  if (llvm::isa<llvm::BinaryOperator>(val)) {
+    return llvm::isa<llvm::IntegerType>(val->getType());
+  }
+  return false;
+}
+
+bool ResizeIntegerHelper::canMutate(llvm::Function *func) {
+  for (auto it = inst_begin(func); it != inst_end(func); ++it) {
+    if (isValidNode(&*it)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ResizeIntegerHelper::shouldMutate() {
+  return !updated && isValidNode(&*mutator->iitInTmp);
+}
+
+// 1, 8, 16, 32, 64 50%
+// 1....64 50%
+llvm::IntegerType *
+ResizeIntegerHelper::getNewIntegerTy(llvm::LLVMContext &context) {
+  static llvm::SmallVector<size_t> defaultWidth{1, 8, 16, 32, 64};
+  if (Random::getRandomBool()) {
+    return llvm::IntegerType::get(
+        context,
+        defaultWidth[Random::getRandomUnsigned() % defaultWidth.size()]);
+  } else {
+    return llvm::IntegerType::get(context,
+                                  1 + Random::getRandomUnsigned() % 64);
+  }
+}
+
+std::vector<llvm::Instruction *>
+ResizeIntegerHelper::constructUseChain(llvm::Instruction *startPoint) {
+  std::vector<llvm::Instruction *> res;
+  llvm::Instruction *cur = startPoint;
+  bool hasNext = false;
+  do {
+    hasNext = false;
+    if(!cur->use_empty()){
+      size_t i = 0;
+      auto use_it = cur->use_begin();
+      // reset use_it at random pos
+      for (size_t tmp = Random::getRandomUnsigned() % cur->getNumUses(); tmp != 0;
+          --tmp, ++use_it)
+        ;
+      // reset end
+
+      for (; i < cur->getNumUses(); ++use_it, ++i) {
+        if (use_it == cur->use_end()) {
+          use_it = cur->use_begin();
+        }
+        llvm::Value *val = use_it->getUser();
+        if (isValidNode(val)) {
+          hasNext = true;
+          res.push_back(cur);
+          cur = (llvm::Instruction *)val;
+          break;
+        }
+      }
+    }
+  } while (hasNext);
+  res.push_back(cur);
+  return res;
+}
+
+llvm::Instruction *
+ResizeIntegerHelper::updateNode(llvm::Instruction *val,
+                                llvm::ArrayRef<llvm::Value *> args) {
+  assert(args.size() == 2);
+  if (llvm::isa<llvm::BinaryOperator>(val)) {
+    llvm::BinaryOperator *op = (llvm::BinaryOperator *)val;
+    llvm::Instruction *nextInst = op->getNextNonDebugInstruction();
+    llvm::BinaryOperator *newOp = llvm::BinaryOperator::Create(
+        op->getOpcode(), args[0], args[1], "", nextInst);
+    assert(newOp->getType()->isIntegerTy());
+    llvm::IntegerType *newIntTy = (llvm::IntegerType *)newOp->getType();
+    for (size_t i = 0; i < newOp->getNumOperands(); ++i) {
+      if (llvm::isa<llvm::UndefValue>(newOp->getOperand(i))) {
+        llvm::Value *resizedVal =
+            mutator_util::updateIntegerSize(op->getOperand(i), newIntTy, newOp);
+        newOp->setOperand(i, resizedVal);
+      }
+    }
+    return newOp;
+  }
+  return nullptr;
+}
+
+void ResizeIntegerHelper::updateChain(std::vector<llvm::Instruction *> &chain,
+                                      llvm::IntegerType *newIntTy) {
+  std::vector<llvm::Instruction *> newChain;
+  if (!chain.empty()) {
+    llvm::Value *undef = llvm::UndefValue::get(newIntTy);
+    llvm::SmallVector<llvm::Value *> args;
+    // head
+    args.push_back(undef);
+    args.push_back(undef);
+    llvm::Instruction *headInst = updateNode(chain.front(), args);
+    chain.front()->setName("old0");
+    headInst->setName("new" + std::to_string(newChain.size()));
+    newChain.push_back(headInst);
+    args.clear();
+    // mid + tail
+    for (size_t i = 1; i < chain.size(); ++i) {
+      for (size_t pos = 0; pos < chain[i]->getNumOperands(); ++pos) {
+        if (chain[i]->getOperand(pos) == chain[i - 1]) {
+          args.push_back(newChain[i - 1]);
+        } else {
+          args.push_back(undef);
+        }
+      }
+      llvm::Instruction *inst = updateNode(chain[i], args);
+      inst->setName("new" + std::to_string(newChain.size()));
+      chain[i]->setName("old" + std::to_string(newChain.size()));
+      newChain.push_back(inst);
+      args.clear();
+    }
+    llvm::Instruction *nextInst = newChain.back()->getNextNonDebugInstruction();
+    llvm::Value *extBack = mutator_util::updateIntegerSize(
+        newChain.back(), (llvm::IntegerType *)chain.back()->getType(),
+        nextInst);
+    extBack->setName("last");
+    chain.back()->replaceAllUsesWith(extBack);
+  }
+}
+
+void ResizeIntegerHelper::resizeOperand(llvm::Instruction *inst, size_t index,
+                                        llvm::IntegerType *newTy) {
+  assert(inst->getNumOperands() > index);
+  llvm::Value *val = inst->getOperand(index);
+  assert(llvm::isa<llvm::IntegerType>(val->getType()));
+
+  llvm::Value *newOp = mutator_util::updateIntegerSize(val, newTy, inst);
+  inst->setOperand(index, newOp);
+}
+
+void ResizeIntegerHelper::mutate(){
+  llvm::Instruction* inst=&*mutator->iitInTmp;
+  std::vector<llvm::Instruction*> useChain=constructUseChain(inst);
+  llvm::IntegerType * oldIntTy=(llvm::IntegerType*)inst->getType(),*newIntTy=oldIntTy;
+  do{
+    newIntTy=getNewIntegerTy(inst->getContext());
+  }while(newIntTy==oldIntTy);
+  updateChain(useChain,newIntTy);
+  updated=true;
+}
+
+void ResizeIntegerHelper::debug(){
+  llvm::errs()<<"integer resized\n";
+  mutator->iitInTmp->getParent()->print(llvm::errs());
+  llvm::errs()<<"\n";
+}

@@ -131,6 +131,11 @@ void FunctionMutator::init(std::shared_ptr<FunctionMutator> self) {
     whenMoveToNextInstFuncs.push_back(helpers.size() - 1);
   }
 
+  if(ResizeIntegerHelper::canMutate(currentFunction)){
+    helpers.push_back(std::make_unique<ResizeIntegerHelper>(self));
+    whenMoveToNextInstFuncs.push_back(helpers.size() - 1);
+  }
+
   if (BinaryInstructionHelper::canMutate(currentFunction)) {
     helpers.push_back(std::make_unique<BinaryInstructionHelper>(self));
     whenMoveToNextInstFuncs.push_back(helpers.size() - 1);
@@ -219,6 +224,7 @@ void FunctionMutator::mutate() {
   if (debug) {
     print();
   }
+
 
   bool mutated = false, canMutate = false;
   do {

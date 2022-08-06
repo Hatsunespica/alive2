@@ -330,3 +330,32 @@ public:
     updated = false;
   }
 };
+
+class ResizeIntegerHelper : public MutationHelper {
+  bool updated;
+  static bool isValidNode(llvm::Value *val);
+  std::vector<llvm::Instruction *>
+  constructUseChain(llvm::Instruction *startPoint);
+  static llvm::IntegerType *getNewIntegerTy(llvm::LLVMContext &context);
+  llvm::Instruction *updateNode(llvm::Instruction *val,
+                                llvm::ArrayRef<llvm::Value *> args);
+  void updateChain(std::vector<llvm::Instruction *> &chain,
+                   llvm::IntegerType *newIntTy);
+  void resizeOperand(llvm::Instruction *inst, size_t index,
+                     llvm::IntegerType *newTy);
+
+public:
+  ResizeIntegerHelper(std::shared_ptr<FunctionMutator> mutator)
+      : MutationHelper(mutator), updated(false){};
+  virtual void init() override{};
+  virtual void reset() override {
+    updated = false;
+  }
+  static bool canMutate(llvm::Function *func);
+  virtual void mutate() override;
+  virtual bool shouldMutate() override;
+  virtual void debug() override;
+  virtual void whenMoveToNextInst() override {
+    updated = false;
+  }
+};
