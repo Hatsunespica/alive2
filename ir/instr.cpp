@@ -2054,9 +2054,10 @@ FnCall::ByteAccessInfo FnCall::getByteAccessInfo() const {
       sz = attr.derefBytes;                                            \
     if (attr.has(decay<decltype(attr)>::type::DereferenceableOrNull))  \
       sz = gcd(sz, attr.derefOrNullBytes);                             \
-    /* Without align, nothing is guaranteed about the bytesize */      \
-    sz = gcd(sz, retattr.align ? retattr.align : 1);                                       \
-    bytesize = bytesize ? gcd(bytesize, sz) : sz;                      \
+    if (sz) {                                                          \
+      sz = gcd(sz, retattr.align ? retattr.align : 1);                 \
+      bytesize = bytesize ? gcd(bytesize, sz) : sz;                    \
+    }                                                                  \
   } while (0)
 
   auto &retattr = getAttributes();
@@ -2076,12 +2077,11 @@ FnCall::ByteAccessInfo FnCall::getByteAccessInfo() const {
     // f(%p, %q) does not contribute to the bytesize. After bytesize is fixed,
     // function calls update a memory with the granularity.
   }
-  if (bytesize == 0) {
-    // No dereferenceable attribute
-    return {};
-  }
-
 #undef UPDATE
+
+  // No dereferenceable attribute
+  if (bytesize == 0)
+    return {};
 
   return ByteAccessInfo::anyType(bytesize);
 }
@@ -3667,17 +3667,23 @@ StateValue Memcpy::toSMT(State &s) const {
 
   uint64_t n;
   expr vsrc, vdst;
-  if (vbytes.isUInt(n) && n > 0) {
+  if (align_dst || (vbytes.isUInt(n) && n > 0)) {
     vdst = s.getAndAddPoisonUB(*dst, true).value;
-    vsrc = s.getAndAddPoisonUB(*src, true).value;
   } else {
     auto &sv_dst = s[*dst];
     auto &sv_dst2 = s[*dst];
+    s.addUB((vbytes != 0).implies(
+              sv_dst.non_poison && sv_dst.value == sv_dst2.value));
+    vdst = sv_dst.value;
+  }
+
+  if (align_src || (vbytes.isUInt(n) && n > 0)) {
+    vsrc = s.getAndAddPoisonUB(*src, true).value;
+  } else {
     auto &sv_src = s[*src];
     auto &sv_src2 = s[*src];
-    s.addUB((vbytes != 0).implies(sv_dst.non_poison && sv_src.non_poison &&
-        (sv_dst.value == sv_dst2.value && sv_src.value == sv_src2.value)));
-    vdst = sv_dst.value;
+    s.addUB((vbytes != 0).implies(
+               sv_src.non_poison && sv_src.value == sv_src2.value));
     vsrc = sv_src.value;
   }
 
