@@ -345,6 +345,24 @@ bool compareFunctions(llvm::Function &F1, llvm::Function &F2,
 }
 } // namespace
 
+cl::list<size_t>
+    disableSEXT(LLVM_ARGS_PREFIX "disable-sigext",
+                cl::desc("option list -- This option would disable adding or "
+                         "removing sigext on integer type you specified"),
+                cl::CommaSeparated, llvm::cl::cat(mutatorArgs));
+
+cl::list<size_t>
+    disableZEXT(LLVM_ARGS_PREFIX "disable-zeroext",
+                cl::desc("option list -- This option would disable adding or "
+                         "removing sigext on integer type you specified"),
+                cl::CommaSeparated, llvm::cl::cat(mutatorArgs));
+
+cl::list<size_t>
+    disableEXT(LLVM_ARGS_PREFIX "disable-ext",
+               cl::desc("option list -- This option would disable all ext "
+                        "instructions on integer type you specified"),
+               cl::CommaSeparated, llvm::cl::cat(mutatorArgs));
+
 int logIndex, validFuncNum;
 void copyMode(), timeMode(), loggerInit(int ith), init(),
     runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator),
@@ -397,7 +415,7 @@ version )EOF";
     }
   }
   if (verbose) {
-  cerr << "Current seed" << Random::getSeed() << "\n";
+    cerr << "Current seed" << Random::getSeed() << "\n";
   }
   if (numCopy > 0) {
     copyMode();
@@ -412,12 +430,12 @@ bool inputVerify() {
   if (stubMutator.openInputFile(testfile)) {
     std::shared_ptr<llvm::Module> M1 = stubMutator.getModule();
     mutator_util::removeTBAAMetadata(M1.get());
-    if(removeUndef){
-      ModuleMutator mutator(M1,verbose,onEveryFunction);
-      std::shared_ptr<llvm::Module> newM1=CloneModule(*M1);
-      mutator.init();      
+    if (removeUndef) {
+      ModuleMutator mutator(M1, verbose, onEveryFunction);
+      std::shared_ptr<llvm::Module> newM1 = CloneModule(*M1);
+      mutator.init();
       mutator.removeAllUndefInFunctions();
-      M1=mutator.getModule();
+      M1 = mutator.getModule();
     }
     if (onlyDump) {
       validFuncNum = M1->size();
@@ -437,10 +455,11 @@ bool inputVerify() {
                      std::to_string(unnamedFunction++));
       }
       if (!fit->isDeclaration() && !fit->getName().empty()) {
-        bool valid = false, hasStoreInst=false;
-        for(auto use_it=fit->use_begin();!hasStoreInst&&use_it!=fit->use_end();use_it++) {
-          llvm::Value* user=use_it->getUser();
-          if(llvm::isa<llvm::StoreInst>(user)){
+        bool valid = false, hasStoreInst = false;
+        for (auto use_it = fit->use_begin();
+             !hasStoreInst && use_it != fit->use_end(); use_it++) {
+          llvm::Value *user = use_it->getUser();
+          if (llvm::isa<llvm::StoreInst>(user)) {
             hasStoreInst = true;
           }
         }
@@ -455,7 +474,8 @@ bool inputVerify() {
               r.status == Results::SYNTACTIC_EQ) {
             ++validFuncNum;
             valid = true;
-            if(fit->getLinkage()==llvm::GlobalValue::LinkageTypes::InternalLinkage){
+            if (fit->getLinkage() ==
+                llvm::GlobalValue::LinkageTypes::InternalLinkage) {
               fit->setLinkage(llvm::GlobalValue::CommonLinkage);
             }
           }
