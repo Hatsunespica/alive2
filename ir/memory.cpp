@@ -542,6 +542,10 @@ namespace IR {
 Memory::AliasSet::AliasSet(const Memory &m)
   : local(m.numLocals(), false), non_local(m.numNonlocals(), false) {}
 
+Memory::AliasSet::AliasSet(const Memory &m1, const Memory &m2)
+  : local(max(m1.numLocals(), m2.numLocals()), false),
+    non_local(max(m1.numNonlocals(), m2.numNonlocals()), false) {}
+
 size_t Memory::AliasSet::size(bool islocal) const {
   return (islocal ? local : non_local).size();
 }
@@ -598,8 +602,8 @@ void Memory::AliasSet::setNoAlias(bool islocal, unsigned bid) {
 
 void Memory::AliasSet::intersectWith(const AliasSet &other) {
   auto intersect = [](auto &a, const auto &b) {
-    auto I2 = b.begin();
-    for (auto I = a.begin(), E = a.end(); I != E; ++I, ++I2) {
+    auto I2 = b.begin(), E2 = b.end();
+    for (auto I = a.begin(), E = a.end(); I != E && I2 != E2; ++I, ++I2) {
       *I = *I && *I2;
     }
   };
@@ -609,8 +613,8 @@ void Memory::AliasSet::intersectWith(const AliasSet &other) {
 
 void Memory::AliasSet::unionWith(const AliasSet &other) {
   auto unionfn = [](auto &a, const auto &b) {
-    auto I2 = b.begin();
-    for (auto I = a.begin(), E = a.end(); I != E; ++I, ++I2) {
+    auto I2 = b.begin(), E2 = b.end();
+    for (auto I = a.begin(), E = a.end(); I != E && I2 != E2; ++I, ++I2) {
       *I = *I || *I2;
     }
   };
@@ -1205,16 +1209,12 @@ void Memory::mkAxioms(const Memory &tgt) const {
     if (!has_null_block || bid != 0)
       state->addAxiom(addr != 0);
 
-    // Ensure block ptr doesn't overflow
-    // Note: the aligned case is handled in alloc()
-    if (!align_ge_size(align, sz)) {
-      auto msb_bit = bits_ptr_address - 1;
-      state->addAxiom(
-        Pointer::hasLocalBit()
-          // don't spill to local addr section
-          ? (addr + sz).extract(msb_bit, msb_bit) == 0
-          : addr.add_no_uoverflow(sz));
-    }
+    auto msb_bit = bits_ptr_address - 1;
+    state->addAxiom(
+      Pointer::hasLocalBit()
+        // don't spill to local addr section
+        ? (addr + sz).extract(msb_bit, msb_bit) == 0
+        : addr.add_no_uoverflow(sz));
 
     // disjointness constraint
     for (unsigned bid2 = bid + 1; bid2 < num_nonlocals; ++bid2) {
@@ -1633,15 +1633,8 @@ Memory::alloc(const expr &size, uint64_t align, BlockKind blockKind,
     state->addAxiom(p.isBlockAligned(align, true));
     state->addAxiom(p.getAllocType() == alloc_ty);
 
-    if (align_bits && observesAddresses()) {
-      auto addr = p.getAddress();
-      state->addAxiom(addr.extract(align_bits - 1, 0) == 0);
-      if (size.ule(align).isTrue()) {
-        expr msb = addr.extract(bits_ptr_address - 1 - Pointer::hasLocalBit(),
-                                align_bits);
-        state->addAxiom(msb != expr::mkInt(-1, msb));
-      }
-    }
+    if (align_bits && observesAddresses())
+      state->addAxiom(p.getAddress().extract(align_bits - 1, 0) == 0);
 
     bool nonconst = (has_null_block && bid == 0) || !is_constglb(bid);
     if (blockKind == CONSTGLOBAL) assert(!nonconst); else assert(nonconst);
@@ -2041,7 +2034,7 @@ Memory::refined(const Memory &other, bool fncall,
   expr ret(true);
   set<expr> undef_vars;
 
-  AliasSet block_alias(other);
+  AliasSet block_alias(*this, other);
   auto min_read_sz = bits_byte / 8;
   for (auto &[mem, set]
          : { make_pair(this, set_ptrs), make_pair(&other, set_ptrs2)}) {

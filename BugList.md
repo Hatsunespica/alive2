@@ -73,6 +73,7 @@ Please contact us or submit a PR if something is missing or inaccurate.
 66. SLPVectorizer replaces add nsw undef with add poison (https://llvm.org/PR55653)
 67. InstCombine swaps inbounds geps originating OOB pointer (https://llvm.org/PR55722)
 68. SLP vectorizer's reduce_and formation introduces poison (https://llvm.org/PR55734)
+69. IRCE introduces UB by changing order of condition checks (https://llvm.org/PR57523)
 
 
 ### Bugs found in Z3
@@ -89,20 +90,4 @@ Please contact us or submit a PR if something is missing or inaccurate.
 11. Assertion violation in SMT equality propagation (https://github.com/Z3Prover/z3/issues/2879)
 12. Assertion violation in qe_lite (https://github.com/Z3Prover/z3/commit/bb5edb7c653f9351fe674630d63cdd2b10338277)
 13. SMT internalize doesn't respect the timeout (https://github.com/Z3Prover/z3/issues/4192)
-
-
-### Mutation bugs
-This section is outdated. All bugs are maintained at alive-mutateBuglist.md (under the same folder) instead
-
-#### Confirmed bugs
-1. InstCombine: 2 related logic bugs from over-generalizing "lshr" to "any shr" (https://llvm.org/PR51351)
-2. Inbounds: might cause problem in signed GEP instruction (https://bugs.llvm.org/show_bug.cgi?id=52429)
-3. NUW and NSW flag in InstSimplify (https://reviews.llvm.org/D116322) 
-
-#### Suspected bugs
-1. This bug combines vectors, UB, and non-standard FP (https://alive2.llvm.org/ce/z/jwZ7uS)
-2. LLVM bug. briefly, uitofp(undef) is more defined than undef, the transformation tries to replace uiofp(undef) with undef (in 2nd lane) (https://alive2.llvm.org/ce/z/CYafMt)
-3. Alive2 Bug. bitcast should not change any bits (cite: langref), bitcast in Alive2 (from float to BV) doesn’t follow this rule. (https://alive2.llvm.org/ce/z/CYafMt )
-4. LLVM bug. For the second lane, with the input from cexp, the source evaluates a result with two possible values (either 0x80000000 or 0x00010000, depends on what the undef in %t2 freezes to); the tgt is undef free but it evaluates to a whole different value 0x00000000. (https://alive2.llvm.org/ce/z/_RDXK-)
-5. Alive2 Bug. Alive2 should limit the parapmeter used in malloc. (https://alive2.llvm.org/ce/z/rEGMoF)
-6. Alive2 Bug. Alive2 is not handing nsz correct for fcmp  (https://alive2.llvm.org/ce/z/RWA-EG)
+14. Unsoundness with smt.bv.size_reduce=true (https://github.com/Z3Prover/z3/issues/6314)
