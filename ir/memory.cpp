@@ -725,10 +725,12 @@ static set<expr> extract_possible_local_bids(Memory &m, const expr &eptr) {
   return ret;
 }
 
+static unsigned max_program_nonlocal_bid() {
+  return num_nonlocals_src-1 - num_inaccessiblememonly_fns - has_write_fncall;
+}
+
 unsigned Memory::nextNonlocalBid() {
-  unsigned next
-    = min(next_nonlocal_bid++,
-          num_nonlocals_src-1 - num_inaccessiblememonly_fns - has_write_fncall);
+  unsigned next = min(next_nonlocal_bid++, max_program_nonlocal_bid());
   assert(!is_fncall_mem(next));
   return next;
 }
@@ -924,7 +926,7 @@ vector<Byte> Memory::load(const Pointer &ptr, unsigned bytes, set<expr> &undef,
 
   vector<Byte> ret;
   for (auto &disj : loaded) {
-    ret.emplace_back(*this, *disj());
+    ret.emplace_back(*this, *std::move(disj)());
   }
   return ret;
 }
@@ -1778,7 +1780,11 @@ StateValue Memory::load(const Pointer &ptr, const Type &type, set<expr> &undef,
 
   // partial order reduction for fresh pointers
   // can alias [0, next_ptr++] U extra_tgt_consts
-  if (is_ptr && !val.non_poison.isFalse()) {
+  // Note that if we reached the max number of bids, it's pointless to
+  // remember that the pointer must be within [0, max], so skip this code
+  // in that case to save memory.
+  if (is_ptr && !val.non_poison.isFalse() &&
+      next_nonlocal_bid <= max_program_nonlocal_bid()) {
     optional<unsigned> max_bid;
     for (auto &p : all_leaf_ptrs(*this, val.value)) {
       auto islocal = p.isLocal();
@@ -1919,7 +1925,7 @@ void Memory::copy(const Pointer &src, const Pointer &dst) {
     dst_blk.type |= blk.type;
   };
   access(src, bits_byte/8, bits_byte/8, false, fn);
-  dst_blk.val = *val();
+  dst_blk.val = *std::move(val)();
 }
 
 void Memory::fillPoison(const expr &bid) {
@@ -2139,9 +2145,9 @@ void Memory::escapeLocalPtr(const expr &ptr, const expr &is_ptr) {
   }
 }
 
-Memory Memory::mkIf(const expr &cond, const Memory &then, const Memory &els) {
+Memory Memory::mkIf(const expr &cond, Memory &&then, Memory &&els) {
   assert(then.state == els.state);
-  Memory ret(then);
+  Memory &ret = then;
   for (unsigned bid = 0, end = ret.numNonlocals(); bid < end; ++bid) {
     if (always_nowrite(bid, false, true))
       continue;
@@ -2179,7 +2185,7 @@ Memory Memory::mkIf(const expr &cond, const Memory &then, const Memory &els) {
   }
 
   ret.next_nonlocal_bid = max(then.next_nonlocal_bid, els.next_nonlocal_bid);
-  return ret;
+  return std::move(ret);
 }
 
 #define P(name, expr) do {      \

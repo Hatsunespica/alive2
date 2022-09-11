@@ -1,6 +1,7 @@
 // Copyright (c) 2018-present The Alive2 Authors.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
+#include "cache/cache.h"
 #include "ir/memory.h"
 #include "llvm_util/llvm2alive.h"
 #include "llvm_util/utils.h"
@@ -81,6 +82,7 @@ bool showed_stats = false;
 bool has_failure = false;
 // If is_clangtv is true, tv should exit with zero
 bool is_clangtv = false;
+unique_ptr<Cache> cache;
 unique_ptr<parallel> parallelMgr;
 stringstream parent_ss;
 std::unique_ptr<llvm::Module> MClone;
@@ -240,14 +242,22 @@ struct TVLegacyPass final : public llvm::ModulePass {
   static void verify(Transform &t, int n, const string &src_tostr) {
     printDot(t.tgt, n);
 
+    auto tgt_tostr = toString(t.tgt);
     if (!opt_always_verify) {
       // Compare Alive2 IR and skip if syntactically equal
-      if (src_tostr == toString(t.tgt)) {
+      if (src_tostr == tgt_tostr) {
         if (!opt_quiet)
           t.print(*out, print_opts);
         *out << "Transformation seems to be correct! (syntactically equal)\n\n";
         return;
       }
+    }
+
+    // Since we have an open connection to the Redis server, we have
+    // to do this before forking. Anyway, this is fast.
+    if (cache && cache->lookup(src_tostr + "===\n" + tgt_tostr)) {
+      *out << "Skipping repeated query\n\n";
+      return;
     }
 
     if (parallelMgr) {
@@ -335,11 +345,6 @@ struct TVLegacyPass final : public llvm::ModulePass {
       parallelMgr->finishChild(/*is_timeout=*/false);
       exit(0);
     }
-  }
-
-  bool doInitialization(llvm::Module &module) override {
-    initialize(module);
-    return false;
   }
 
   static void initialize(llvm::Module &module) {

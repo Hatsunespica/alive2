@@ -73,23 +73,46 @@ public:
       I->second |= std::forward<D>(domain);
   }
 
-  template <typename D>
-  void add_disj(const DisjointExpr<T> &other, D &&domain) {
+  void add_disj(const DisjointExpr<T> &other, const expr &domain) {
     assert(!default_val && !other.default_val);
     for (auto &[v, d] : other.vals) {
-      add(v, d && std::forward<D>(domain));
+      add(v, d && domain);
     }
   }
 
-  std::optional<T> operator()() const {
+  void add_disj(DisjointExpr<T> &&other, const expr &domain) {
+    assert(!default_val && !other.default_val);
+    for (auto &[v, d] : other.vals) {
+      add(std::move(const_cast<T&>(v)), d && domain);
+    }
+  }
+
+  std::optional<T> operator()() const& {
     std::optional<T> ret;
     for (auto &[val, domain] : vals) {
       if (domain.isTrue())
         return val;
 
-      ret = ret ? T::mkIf(domain, val, *ret) : val;
+      ret = ret ? T::mkIf(domain, val, *std::move(ret)) : val;
     }
-    return ret ? ret : default_val;
+    if (ret)
+      return ret;
+    return default_val;
+  }
+
+  std::optional<T> operator()() && {
+    std::optional<T> ret;
+    for (auto &[val0, domain] : vals) {
+      auto &val = const_cast<T&>(val0);
+      if (domain.isTrue())
+        return std::move(val);
+
+      ret = ret ? T::mkIf(domain, std::move(val), *std::move(ret))
+                : std::move(val);
+    }
+    if (ret)
+      return ret;
+    return std::move(default_val);
   }
 
   std::optional<T> lookup(const expr &domain) const {
@@ -136,7 +159,7 @@ public:
   }
 
   // returns: data, domain, quant var, precondition
-  std::tuple<T,expr,expr,expr> operator()() const {
+  std::tuple<T,expr,expr,expr> operator()() && {
     if (vals.size() == 1)
       return { vals.begin()->first, vals.begin()->second, expr(), true };
 
@@ -152,7 +175,8 @@ public:
     for (unsigned i = vals.size(); i > 0; --i) {
       auto cmp = qvar == (i-1);
       pre = expr::mkIf(cmp, I->second, pre);
-      ret = first ? I->first : T::mkIf(cmp, I->first, ret);
+      ret = first ? std::move(I->first)
+                  : T::mkIf(cmp, std::move(I->first), std::move(ret));
       first = false;
       ++I;
     }

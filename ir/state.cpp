@@ -12,6 +12,10 @@ using namespace smt;
 using namespace util;
 using namespace std;
 
+static void throw_oom_exception() {
+  throw AliveException("Out of memory; skipping function.", false);
+}
+
 namespace IR {
 
 expr State::CurrentDomain::operator()() const {
@@ -111,15 +115,16 @@ State::ValueAnalysis::FnCallRanges::project(const string &name) const {
 }
 
 State::VarArgsData
-State::VarArgsData::mkIf(const expr &cond, const VarArgsData &then,
-                         const VarArgsData &els) {
+State::VarArgsData::mkIf(const expr &cond, VarArgsData &&then,
+                         VarArgsData &&els) {
   VarArgsData ret;
   for (auto &[ptr, entry] : then.data) {
     auto other = els.data.find(ptr);
     if (other == els.data.end()) {
-      ret.data.try_emplace(ptr, cond && entry.alive, expr(entry.next_arg),
-                           expr(entry.num_args), expr(entry.is_va_start),
-                           expr(entry.active));
+      ret.data.try_emplace(ptr, cond && entry.alive, std::move(entry.next_arg),
+                           std::move(entry.num_args),
+                           std::move(entry.is_va_start),
+                           std::move(entry.active));
     } else {
 #define C(f) expr::mkIf(cond, entry.f, other->second.f)
       ret.data.try_emplace(ptr, C(alive), C(next_arg), C(num_args),
@@ -131,9 +136,9 @@ State::VarArgsData::mkIf(const expr &cond, const VarArgsData &then,
   for (auto &[ptr, entry] : els.data) {
     if (then.data.count(ptr))
       continue;
-    ret.data.try_emplace(ptr, !cond && entry.alive, expr(entry.next_arg),
-                         expr(entry.num_args), expr(entry.is_va_start),
-                         expr(entry.active));
+    ret.data.try_emplace(ptr, !cond && entry.alive, std::move(entry.next_arg),
+                         std::move(entry.num_args),
+                         std::move(entry.is_va_start), std::move(entry.active));
   }
 
   return ret;
@@ -142,7 +147,8 @@ State::VarArgsData::mkIf(const expr &cond, const VarArgsData &then,
 State::State(const Function &f, bool source)
   : f(f), source(source), memory(*this),
     fp_rounding_mode(expr::mkVar("fp_rounding_mode", 3)),
-    return_val(f.getType().getDummyValue(false)), return_memory(memory) {}
+    return_val(DisjointExpr(f.getType().getDummyValue(false))),
+    return_memory(DisjointExpr(memory.dup())) {}
 
 void State::resetGlobals() {
   Memory::resetGlobals();
@@ -434,7 +440,7 @@ const StateValue& State::operator[](const Value &val) {
   }
 
   if (hit_half_memory_limit())
-    throw AliveException("Out of memory; skipping function.", false);
+    throw_oom_exception();
 
   auto sval_new = sval.subst(repls);
   if (sval_new.eq(sval)) {
@@ -555,6 +561,9 @@ bool State::startBB(const BasicBlock &bb) {
   if (I == predecessor_data.end())
     return false;
 
+  if (hit_memory_limit())
+    throw_oom_exception();
+
   DisjointExpr<Memory> in_memory;
   DisjointExpr<expr> UB;
   DisjointExpr<VarArgsData> var_args_in;
@@ -565,27 +574,34 @@ bool State::startBB(const BasicBlock &bb) {
     path.add(data.path);
     expr p = data.path();
     UB.add_disj(data.UB, p);
-    in_memory.add_disj(data.mem, p);
-    var_args_in.add(data.var_args, std::move(p));
+
+    // This data is never used again, so clean it up to reduce mem consumption
+    in_memory.add_disj(std::move(data.mem), p);
+    var_args_in.add(std::move(data.var_args), std::move(p));
     domain.undef_vars.insert(data.undef_vars.begin(), data.undef_vars.end());
+    data.undef_vars.clear();
 
     if (isFirst)
-      analysis = data.analysis;
-    else
+      analysis = std::move(data.analysis);
+    else {
       analysis.meet_with(data.analysis);
+      data.analysis = {};
+    }
     isFirst = false;
   }
   assert(!isFirst);
 
-  domain.path = path();
-  domain.UB = *UB();
-  memory = *in_memory();
-  var_args_data = *var_args_in();
+  domain.path   = std::move(path)();
+  domain.UB     = *std::move(UB)();
+  memory        = *std::move(in_memory)();
+  var_args_data = *std::move(var_args_in)();
 
   return domain;
 }
 
-void State::addJump(const BasicBlock &dst0, expr &&cond) {
+void State::addJump(const BasicBlock &dst0, expr &&cond, bool always_jump) {
+  always_jump = always_jump || cond.isTrue();
+
   cond &= domain.path;
   if (cond.isFalse())
     return;
@@ -596,17 +612,23 @@ void State::addJump(const BasicBlock &dst0, expr &&cond) {
   }
 
   auto &data = predecessor_data[dst][current_bb];
-  data.mem.add(memory, cond);
+  if (always_jump) {
+    data.mem.add(std::move(memory), cond);
+    data.analysis = std::move(analysis);
+    data.var_args = std::move(var_args_data);
+  } else {
+    data.mem.add(memory.dup(), cond);
+    data.analysis = analysis;
+    data.var_args = var_args_data;
+  }
   data.UB.add(domain.UB(), cond);
   data.path.add(std::move(cond));
   data.undef_vars.insert(undef_vars.begin(), undef_vars.end());
   data.undef_vars.insert(domain.undef_vars.begin(), domain.undef_vars.end());
-  data.analysis = analysis;
-  data.var_args = var_args_data;
 }
 
 void State::addJump(const BasicBlock &dst) {
-  addJump(dst, true);
+  addJump(dst, true, true);
   addUB(expr(false));
 }
 
@@ -618,13 +640,13 @@ void State::addCondJump(const expr &cond, const BasicBlock &dst_true,
                         const BasicBlock &dst_false) {
   expr cond_false = cond == 0;
   addJump(dst_true,  !cond_false);
-  addJump(dst_false, std::move(cond_false));
+  addJump(dst_false, std::move(cond_false), true);
   addUB(expr(false));
 }
 
 void State::addReturn(StateValue &&val) {
-  return_val.add(std::move(val), domain.path);
-  return_memory.add(memory, domain.path);
+  get<0>(return_val).add(std::move(val), domain.path);
+  get<0>(return_memory).add(std::move(memory), domain.path);
   auto dom = domain();
   return_domain.add(expr(dom));
   function_domain.add(std::move(dom));
@@ -658,7 +680,7 @@ void State::addNoReturn(const expr &cond) {
   if (cond.isFalse())
     return;
   domain.noreturn = !cond;
-  return_memory.add(memory, domain.path && cond);
+  get<0>(return_memory).add(memory.dup(), domain.path && cond);
   function_domain.add(domain() && cond);
   return_undef_vars.insert(undef_vars.begin(), undef_vars.end());
   return_undef_vars.insert(domain.undef_vars.begin(), domain.undef_vars.end());
@@ -836,7 +858,7 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
     auto call_data_pair
       = calls_fn.try_emplace(
           { std::move(inputs), std::move(ptr_inputs), std::move(call_ranges),
-            reads_memory ? memory : Memory(*this),
+            reads_memory ? memory.dup() : Memory(*this),
             reads_memory, argmemonly, inaccessiblememonly, noret, willret });
     auto &I = call_data_pair.first;
     bool inserted = call_data_pair.second;
@@ -904,7 +926,7 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
     }
 
     if (data) {
-      auto [d, domain, qvar, pre] = data();
+      auto [d, domain, qvar, pre] = std::move(data)();
       addUB(std::move(domain));
       addUB(std::move(d.ub));
       addNoReturn(std::move(d.noreturns));
@@ -972,7 +994,7 @@ StateValue State::rewriteUndef(StateValue &&val, const set<expr> &undef_vars) {
   if (undef_vars.empty())
     return std::move(val);
   if (hit_half_memory_limit())
-    throw AliveException("Out of memory; skipping function.", false);
+    throw_oom_exception();
 
   vector<pair<expr, expr>> repls;
   for (auto &var : undef_vars) {
@@ -1011,6 +1033,18 @@ expr State::sinkDomain() const {
   return ret();
 }
 
+const StateValue& State::returnValCached() {
+  if (auto *v = get_if<DisjointExpr<StateValue>>(&return_val))
+    return_val = *std::move(*v)();
+  return get<StateValue>(return_val);
+}
+
+Memory& State::returnMemory() {
+  if (auto *m = get_if<DisjointExpr<Memory>>(&return_memory))
+    return_memory = *std::move(*m)();
+  return get<Memory>(return_memory);
+}
+
 expr State::getJumpCond(const BasicBlock &src, const BasicBlock &dst) const {
   auto I = predecessor_data.find(&dst);
   if (I == predecessor_data.end())
@@ -1042,7 +1076,7 @@ void State::markGlobalAsAllocated(const string &glbvar) {
   itr->second.second = true;
 }
 
-void State::syncSEdataWithSrc(const State &src) {
+void State::syncSEdataWithSrc(State &src) {
   assert(glbvar_bids.empty());
   assert(src.isSource() && !isSource());
   glbvar_bids = src.glbvar_bids;
@@ -1051,8 +1085,8 @@ void State::syncSEdataWithSrc(const State &src) {
 
   returned_input = src.returned_input;
 
-  fn_call_data = src.fn_call_data;
-  inaccessiblemem_bids = src.inaccessiblemem_bids;
+  fn_call_data = std::move(src.fn_call_data);
+  inaccessiblemem_bids = std::move(src.inaccessiblemem_bids);
   memory.syncWithSrc(src.returnMemory());
 }
 

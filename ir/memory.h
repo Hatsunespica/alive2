@@ -207,6 +207,8 @@ class Memory {
                              const smt::expr &size, const smt::expr &align,
                              unsigned align_bits);
 
+  Memory(const Memory&) = default;
+
 public:
   enum BlockKind {
     MALLOC, CXX_NEW, STACK, GLOBAL, CONSTGLOBAL
@@ -227,6 +229,10 @@ public:
   };
 
   Memory(State &state);
+  Memory(Memory&&) = default;
+  Memory& operator=(Memory&&) = default;
+
+  Memory dup() const { return *this; }
 
   void mkAxioms(const Memory &other) const;
 
@@ -325,8 +331,7 @@ public:
   smt::expr checkNocapture() const;
   void escapeLocalPtr(const smt::expr &ptr, const smt::expr &is_ptr);
 
-  static Memory mkIf(const smt::expr &cond, const Memory &then,
-                     const Memory &els);
+  static Memory mkIf(const smt::expr &cond, Memory &&then, Memory &&els);
 
   auto operator<=>(const Memory &rhs) const = default;
 
