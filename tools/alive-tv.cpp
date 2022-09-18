@@ -1,6 +1,7 @@
 // Copyright (c) 2018-present The Alive2 Authors.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
+#include "cache/cache.h"
 #include "llvm_util/llvm2alive.h"
 #include "llvm_util/llvm_optimizer.h"
 #include "smt/smt.h"
@@ -87,6 +88,7 @@ std::unique_ptr<llvm::Module> openInputFile(llvm::LLVMContext &Context,
 }
 
 optional<smt::smt_initializer> smt_init;
+unique_ptr<Cache> cache;
 
 struct Results {
   Transform t;
@@ -113,12 +115,12 @@ Results verify(llvm::Function &F1, llvm::Function &F2,
                llvm::TargetLibraryInfoWrapperPass &TLI,
                bool print_transform = false,
                bool always_verify = false) {
-  auto fn1 = llvm2alive(F1, TLI.getTLI(F1));
+  auto fn1 = llvm2alive(F1, TLI.getTLI(F1), true);
   if (!fn1)
     return Results::Error("Could not translate '" + F1.getName().str() +
                           "' to Alive IR\n");
 
-  auto fn2 = llvm2alive(F2, TLI.getTLI(F2), fn1->getGlobalVarNames());
+  auto fn2 = llvm2alive(F2, TLI.getTLI(F2), false, fn1->getGlobalVarNames());
   if (!fn2)
     return Results::Error("Could not translate '" + F2.getName().str() +
                           "' to Alive IR\n");
@@ -131,7 +133,7 @@ Results verify(llvm::Function &F1, llvm::Function &F2,
     stringstream ss1, ss2;
     r.t.src.print(ss1);
     r.t.tgt.print(ss2);
-    if (ss1.str() == ss2.str()) {
+    if (std::move(ss1).str() == std::move(ss2).str()) {
       if (print_transform)
         r.t.print(*out, {});
       r.status = Results::SYNTACTIC_EQ;

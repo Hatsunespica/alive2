@@ -90,6 +90,7 @@ class Memory {
 
   public:
     AliasSet(const Memory &m); // no alias
+    AliasSet(const Memory &m1, const Memory &m2); // no alias
     size_t size(bool local) const;
 
     int isFullUpToAlias(bool local) const; // >= 0 if up to
@@ -192,7 +193,8 @@ class Memory {
              std::vector<std::pair<unsigned, smt::expr>> &data);
 
   void storeLambda(const Pointer &ptr, const smt::expr &offset,
-                   const smt::expr &bytes, const smt::expr &val,
+                   const smt::expr &bytes,
+                   const std::vector<std::pair<unsigned, smt::expr>> &data,
                    const std::set<smt::expr> &undef, uint64_t align);
 
   smt::expr blockValRefined(const Memory &other, unsigned bid, bool local,
@@ -205,6 +207,8 @@ class Memory {
                              const smt::expr &short_bid,
                              const smt::expr &size, const smt::expr &align,
                              unsigned align_bits);
+
+  Memory(const Memory&) = default;
 
 public:
   enum BlockKind {
@@ -226,6 +230,10 @@ public:
   };
 
   Memory(State &state);
+  Memory(Memory&&) = default;
+  Memory& operator=(Memory&&) = default;
+
+  Memory dup() const { return *this; }
 
   void mkAxioms(const Memory &other) const;
 
@@ -303,6 +311,10 @@ public:
   void memset(const smt::expr &ptr, const StateValue &val,
               const smt::expr &bytesize, uint64_t align,
               const std::set<smt::expr> &undef_vars, bool deref_check = true);
+
+  void memset_pattern(const smt::expr &ptr, const smt::expr &pattern,
+                      const smt::expr &bytesize, unsigned pattern_length);
+
   void memcpy(const smt::expr &dst, const smt::expr &src,
               const smt::expr &bytesize, uint64_t align_dst, uint64_t align_src,
               bool move);
@@ -324,8 +336,7 @@ public:
   smt::expr checkNocapture() const;
   void escapeLocalPtr(const smt::expr &ptr, const smt::expr &is_ptr);
 
-  static Memory mkIf(const smt::expr &cond, const Memory &then,
-                     const Memory &els);
+  static Memory mkIf(const smt::expr &cond, Memory &&then, Memory &&els);
 
   auto operator<=>(const Memory &rhs) const = default;
 

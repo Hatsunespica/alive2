@@ -99,6 +99,9 @@ class llvm2alive_ : public llvm::InstVisitor<llvm2alive_, unique_ptr<Instr>> {
   BasicBlock *BB;
   llvm::Function &f;
   const llvm::TargetLibraryInfo &TLI;
+  /// True if converting a source function, false when converting a target
+  /// function.
+  bool IsSrc;
   vector<llvm::Instruction*> i_constexprs;
   const vector<string_view> &gvnamesInSrc;
   vector<pair<Phi*, llvm::PHINode*>> todo_phis;
@@ -167,9 +170,10 @@ class llvm2alive_ : public llvm::InstVisitor<llvm2alive_, unique_ptr<Instr>> {
   }
 
 public:
-  llvm2alive_(llvm::Function &f, const llvm::TargetLibraryInfo &TLI,
+  llvm2alive_(llvm::Function &f, const llvm::TargetLibraryInfo &TLI, bool IsSrc,
               const vector<string_view> &gvnamesInSrc)
-      : f(f), TLI(TLI), gvnamesInSrc(gvnamesInSrc), out(&get_outs()) {}
+      : f(f), TLI(TLI), IsSrc(IsSrc), gvnamesInSrc(gvnamesInSrc),
+        out(&get_outs()) {}
 
   ~llvm2alive_() {
     for (auto &inst : i_constexprs) {
@@ -1216,11 +1220,20 @@ public:
 
       // non-relevant for correctness
       case LLVMContext::MD_loop:
+      case LLVMContext::MD_nosanitize:
       case LLVMContext::MD_prof:
       case LLVMContext::MD_unpredictable:
         break;
 
       default:
+        // non-relevant for correctness
+        if (ID == Node->getContext().getMDKindID("irce.loop.clone"))
+          break;
+
+        // For the target, dropping metadata is fine as metadata will never turn
+        // a incorrect function into a correct one.
+        if (!IsSrc)
+          break;
         *out << "ERROR: Unsupported metadata: " << ID << '\n';
         return false;
       }
@@ -1683,8 +1696,8 @@ initializer::initializer(ostream &os, const llvm::DataLayout &DL) {
 
 optional<IR::Function> llvm2alive(llvm::Function &F,
                                   const llvm::TargetLibraryInfo &TLI,
+                                  bool IsSrc,
                                   const vector<string_view> &gvnamesInSrc) {
-  return llvm2alive_(F, TLI, gvnamesInSrc).run();
+  return llvm2alive_(F, TLI, IsSrc, gvnamesInSrc).run();
 }
-
 }

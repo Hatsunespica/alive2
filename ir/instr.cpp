@@ -2031,7 +2031,7 @@ uint64_t FnCall::getMaxAccessSize() const {
   return sz;
 }
 
-FnCall::ByteAccessInfo FnCall::getByteAccessInfo() const {
+MemInstr::ByteAccessInfo FnCall::getByteAccessInfo() const {
   if (attrs.has(AllocKind::Uninitialized) || attrs.has(AllocKind::Free))
     return {};
 
@@ -2760,7 +2760,7 @@ StateValue Phi::toSMT(State &s) const {
     }
   }
 
-  StateValue sv = *ret();
+  StateValue sv = *std::move(ret)();
   auto identity = [](const expr &x) { return x; };
   return fm_poison(s, sv.value, sv.non_poison, identity, getType(), fmath, true,
                    false);
@@ -3443,7 +3443,7 @@ uint64_t Load::getMaxAccessSize() const {
   return Memory::getStoreByteSize(getType());
 }
 
-Load::ByteAccessInfo Load::getByteAccessInfo() const {
+MemInstr::ByteAccessInfo Load::getByteAccessInfo() const {
   return ByteAccessInfo::get(getType(), false, align);
 }
 
@@ -3485,7 +3485,7 @@ uint64_t Store::getMaxAccessSize() const {
   return Memory::getStoreByteSize(val->getType());
 }
 
-Store::ByteAccessInfo Store::getByteAccessInfo() const {
+MemInstr::ByteAccessInfo Store::getByteAccessInfo() const {
   return ByteAccessInfo::get(val->getType(), true, align);
 }
 
@@ -3534,7 +3534,7 @@ uint64_t Memset::getMaxAccessSize() const {
   return getIntOr(*bytes, UINT64_MAX);
 }
 
-Memset::ByteAccessInfo Memset::getByteAccessInfo() const {
+MemInstr::ByteAccessInfo Memset::getByteAccessInfo() const {
   unsigned byteSize = 1;
   if (auto bs = getInt(*bytes))
     byteSize = gcd(align, *bs);
@@ -3588,6 +3588,61 @@ unique_ptr<Instr> Memset::dup(Function &f, const string &suffix) const {
 }
 
 
+DEFINE_AS_RETZEROALIGN(MemsetPattern, getMaxAllocSize);
+DEFINE_AS_RETZERO(MemsetPattern, getMaxGEPOffset);
+
+MemsetPattern::MemsetPattern(Value &ptr, Value &pattern, Value &bytes,
+                             unsigned pattern_length)
+  : MemInstr(Type::voidTy, "memset_pattern" + to_string(pattern_length)),
+    ptr(&ptr), pattern(&pattern), bytes(&bytes),
+    pattern_length(pattern_length) {}
+
+uint64_t MemsetPattern::getMaxAccessSize() const {
+  return getIntOr(*bytes, UINT64_MAX);
+}
+
+MemInstr::ByteAccessInfo MemsetPattern::getByteAccessInfo() const {
+  unsigned byteSize = 1;
+  if (auto bs = getInt(*bytes))
+    byteSize = *bs;
+  return ByteAccessInfo::intOnly(byteSize);
+}
+
+vector<Value*> MemsetPattern::operands() const {
+  return { ptr, pattern, bytes };
+}
+
+void MemsetPattern::rauw(const Value &what, Value &with) {
+  RAUW(ptr);
+  RAUW(pattern);
+  RAUW(bytes);
+}
+
+void MemsetPattern::print(ostream &os) const {
+  os << getName() << ' ' << *ptr << ", " << *pattern << ", " << *bytes;
+}
+
+StateValue MemsetPattern::toSMT(State &s) const {
+  auto &vptr = s.getAndAddPoisonUB(*ptr, false).value;
+  auto &vpattern = s.getAndAddPoisonUB(*pattern, false).value;
+  auto &vbytes = s.getAndAddPoisonUB(*bytes, true).value;
+  check_can_store(s, vptr);
+  check_can_load(s, vpattern);
+  s.getMemory().memset_pattern(vptr, vpattern, vbytes, pattern_length);
+  return {};
+}
+
+expr MemsetPattern::getTypeConstraints(const Function &f) const {
+  return ptr->getType().enforcePtrType() &&
+         pattern->getType().enforcePtrType() &&
+         bytes->getType().enforceIntType();
+}
+
+unique_ptr<Instr> MemsetPattern::dup(Function &f, const string &suffix) const {
+  return make_unique<MemsetPattern>(*ptr, *pattern, *bytes, pattern_length);
+}
+
+
 DEFINE_AS_RETZEROALIGN(FillPoison, getMaxAllocSize);
 DEFINE_AS_RETZERO(FillPoison, getMaxGEPOffset);
 
@@ -3595,7 +3650,7 @@ uint64_t FillPoison::getMaxAccessSize() const {
   return getGlobalVarSize(ptr);
 }
 
-FillPoison::ByteAccessInfo FillPoison::getByteAccessInfo() const {
+MemInstr::ByteAccessInfo FillPoison::getByteAccessInfo() const {
   return ByteAccessInfo::intOnly(1);
 }
 
@@ -3634,7 +3689,7 @@ uint64_t Memcpy::getMaxAccessSize() const {
   return getIntOr(*bytes, UINT64_MAX);
 }
 
-Memcpy::ByteAccessInfo Memcpy::getByteAccessInfo() const {
+MemInstr::ByteAccessInfo Memcpy::getByteAccessInfo() const {
 #if 0
   if (auto bytes = get_int(i->getBytes()))
     byteSize = gcd(gcd(i->getSrcAlign(), i->getDstAlign()), *bytes);
@@ -3716,7 +3771,7 @@ uint64_t Memcmp::getMaxAccessSize() const {
   return getIntOr(*num, UINT64_MAX);
 }
 
-Memcmp::ByteAccessInfo Memcmp::getByteAccessInfo() const {
+MemInstr::ByteAccessInfo Memcmp::getByteAccessInfo() const {
   auto info = ByteAccessInfo::anyType(1);
   info.observesAddresses = true;
   return info;
@@ -4033,7 +4088,8 @@ StateValue VaCopy::toSMT(State &s) const {
 
   // FIXME: dst should be empty or we have a mem leak
   // alive, next_arg, num_args, is_va_start, active
-  data[dst_raw] = { true, *next_arg(), *num_args(), *is_va_start(), true };
+  data[dst_raw] = { true, *std::move(next_arg)(), *std::move(num_args)(),
+                    *std::move(is_va_start)(), true };
 
   return {};
 }
@@ -4094,7 +4150,7 @@ StateValue VaArg::toSMT(State &s) const {
     entry.next_arg = expr::mkIf(eq, next_arg, entry.next_arg);
   }
 
-  return *ret();
+  return *std::move(ret)();
 }
 
 expr VaArg::getTypeConstraints(const Function &f) const {

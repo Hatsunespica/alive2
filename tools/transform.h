@@ -8,9 +8,11 @@
 #include "smt/solver.h"
 #include "util/errors.h"
 #include <memory>
-#include <string>
 #include <ostream>
+#include <string>
 #include <unordered_map>
+
+class Cache;
 
 namespace tools {
 

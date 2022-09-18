@@ -29,7 +29,6 @@ using namespace util;
 using namespace std;
 using util::config::dbg;
 
-
 static void print_single_varval(ostream &os, const State &st, const Model &m,
                                 const Value *var, const Type &type,
                                 const StateValue &val, unsigned child) {
@@ -388,8 +387,8 @@ static expr encode_undef_refinement(const Type &type, const State::ValTy &a,
 }
 
 static void
-check_refinement(Errors &errs, const Transform &t, const State &src_state,
-                 const State &tgt_state, const Value *var, const Type &type,
+check_refinement(Errors &errs, const Transform &t, State &src_state,
+                 State &tgt_state, const Value *var, const Type &type,
                  const State::ValTy &ap, const State::ValTy &bp,
                  bool check_each_var) {
   auto &fndom_a  = ap.domain;
@@ -529,8 +528,8 @@ check_refinement(Errors &errs, const Transform &t, const State &src_state,
   CHECK(dom && !value_cnstr, print_value, "Value mismatch");
 
   // 6. Check memory
-  auto src_mem = src_state.returnMemory();
-  auto tgt_mem = tgt_state.returnMemory();
+  auto &src_mem = src_state.returnMemory();
+  auto &tgt_mem = tgt_state.returnMemory();
   auto [memory_cnstr0, ptr_refinement0, mem_undef]
     = src_mem.refined(tgt_mem, false);
   auto &ptr_refinement = ptr_refinement0;
@@ -989,8 +988,10 @@ static void calculateAndInitConstants(Transform &t) {
 
   observes_addresses |= has_int2ptr || has_ptr2int;
   // condition can happen with ptr2int(poison)
-  if (has_ptr2int && num_nonlocals == 0)
+  if (has_ptr2int && num_nonlocals == 0) {
+    ++num_nonlocals_src;
     ++num_nonlocals;
+  }
 
   if (!does_int_mem_access && !does_ptr_mem_access && has_fncall)
     does_int_mem_access = true;
@@ -1093,8 +1094,8 @@ static void calculateAndInitConstants(Transform &t) {
 
 namespace tools {
 
-TransformVerify::TransformVerify(Transform &t, bool check_each_var) :
-  t(t), check_each_var(check_each_var) {
+TransformVerify::TransformVerify(Transform &t, bool check_each_var)
+  : t(t), check_each_var(check_each_var) {
   if (check_each_var) {
     for (auto &i : t.tgt.instrs()) {
       tgt_instrs.emplace(i.getName(), &i);

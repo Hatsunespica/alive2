@@ -1,6 +1,7 @@
 // Copyright (c) 2018-present The Alive2 Authors.
 // Distributed under the MIT license that can be found in the LICENSE file.
 
+#include "cache/cache.h"
 #include "ir/memory.h"
 #include "llvm_util/llvm2alive.h"
 #include "llvm_util/utils.h"
@@ -81,6 +82,7 @@ bool showed_stats = false;
 bool has_failure = false;
 // If is_clangtv is true, tv should exit with zero
 bool is_clangtv = false;
+unique_ptr<Cache> cache;
 unique_ptr<parallel> parallelMgr;
 stringstream parent_ss;
 std::unique_ptr<llvm::Module> MClone;
@@ -203,8 +205,9 @@ struct TVLegacyPass final : public llvm::ModulePass {
       return false;
     }
 
-    auto fn = llvm2alive(F, *TLI, first ? vector<string_view>()
-                                        : I->second.fn.getGlobalVarNames());
+    auto fn = llvm2alive(F, *TLI, first,
+                         first ? vector<string_view>()
+                               : I->second.fn.getGlobalVarNames());
     if (!fn) {
       fns.erase(I);
       return false;
@@ -223,33 +226,38 @@ struct TVLegacyPass final : public llvm::ModulePass {
     t.src = std::move(I->second.fn);
     t.tgt = std::move(*fn);
 
-    bool regenerate_tgt = verify(t, I->second.n++, I->second.fn_tostr);
+    verify(t, I->second.n++, I->second.fn_tostr);
 
-    if (regenerate_tgt) {
-      I->second.fn = *llvm2alive(F, *TLI);
-      I->second.fn_tostr = toString(I->second.fn);
-    } else {
-      I->second.fn = std::move(t.tgt);
-      // updating I->second.fn_tostr isn't necessary because the two functions
-      // are equal or some error occurred.
+    fn = llvm2alive(F, *TLI, true);
+    if (!fn) {
+      fns.erase(I);
+      return false;
     }
-
+    I->second.fn = std::move(*fn);
+    if (!opt_always_verify)
+      I->second.fn_tostr = toString(I->second.fn);
     return false;
   }
 
-  // If it returns true, the caller should regenerate tgt using llvm2alive().
-  // If it returns false, the caller can simply move t.tgt to info.fn
-  static bool verify(Transform &t, int n, const string &src_tostr) {
+  static void verify(Transform &t, int n, const string &src_tostr) {
     printDot(t.tgt, n);
 
+    auto tgt_tostr = toString(t.tgt);
     if (!opt_always_verify) {
       // Compare Alive2 IR and skip if syntactically equal
-      if (src_tostr == toString(t.tgt)) {
+      if (src_tostr == tgt_tostr) {
         if (!opt_quiet)
           t.print(*out, print_opts);
         *out << "Transformation seems to be correct! (syntactically equal)\n\n";
-        return false;
+        return;
       }
+    }
+
+    // Since we have an open connection to the Redis server, we have
+    // to do this before forking. Anyway, this is fast.
+    if (cache && cache->lookup(src_tostr + "===\n" + tgt_tostr)) {
+      *out << "Skipping repeated query\n\n";
+      return;
     }
 
     if (parallelMgr) {
@@ -272,7 +280,7 @@ struct TVLegacyPass final : public llvm::ModulePass {
          * but only to make parallel output match sequential
          * output. we can remove it later if we want.
          */
-        return true;
+        return;
       }
 
       if (subprocess_timeout != -1) {
@@ -312,8 +320,8 @@ struct TVLegacyPass final : public llvm::ModulePass {
 
     if (Errors errs = verifier.verify()) {
       *out << "Transformation doesn't verify!" <<
-        (errs.isUnsound() ? " (unsound)" : " (not unsound)") <<
-        "\n" << errs;
+              (errs.isUnsound() ? " (unsound)\n" : " (not unsound)\n")
+           << errs;
       if (errs.isUnsound()) {
         has_failure = true;
         *out << "\nPass: " << pass_name << '\n';
@@ -328,10 +336,6 @@ struct TVLegacyPass final : public llvm::ModulePass {
       *out << "Transformation seems to be correct!\n\n";
     }
 
-    // Regenerate tgt because preprocessing may have changed it
-    if (!parallelMgr)
-      return true;
-
   done:
     if (parallelMgr) {
       showStats();
@@ -341,10 +345,9 @@ struct TVLegacyPass final : public llvm::ModulePass {
       parallelMgr->finishChild(/*is_timeout=*/false);
       exit(0);
     }
-    return false;
   }
 
-  bool doInitialization(llvm::Module &module) override {
+ bool doInitialization(llvm::Module &module) override {
     initialize(module);
     return false;
   }

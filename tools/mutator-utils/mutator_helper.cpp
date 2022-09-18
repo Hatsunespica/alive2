@@ -160,23 +160,15 @@ void MutateInstructionHelper::debug() {
 void MutateInstructionHelper::mutate() {
   // do extra handling for br insts
   if (llvm::isa<llvm::BranchInst>(mutator->iitInTmp)) {
-    /*llvm::BranchInst* brInst=(llvm::BranchInst*)&*mutator->tmpIit;
-    unsigned sz=brInst->getNumSuccessors();
-    llvm::SmallVector<llvm::BasicBlock*> bbs;
-    if(sz>0){
-      for(auto it=mutator->tmpFit->begin();it!=mutator->tmpFit->end();++it){
-        bbs.push_back(&*it);
-      }
-    }
-    for(unsigned i=0;i<sz;++i){
-      if(Random::getRandomBool()){
-        brInst->setSuccessor(i,bbs[Random::getRandomUnsigned()%bbs.size()]);
-      }
-    }*/
+    //empty for now
   }
   // 75% chances to add a new inst, 25% chances to replace with a existent usage
   else if ((Random::getRandomUnsigned() & 3) != 0) {
-    bool res = insertRandomBinaryInstruction(&*(mutator->iitInTmp));
+    //indices in GEP point to its member variabls, shouldn't be random changed.
+    bool isGEPInst=llvm::isa<llvm::GetElementPtrInst>(*mutator->iitInTmp),res=false;
+    if(!isGEPInst){
+      res = insertRandomBinaryInstruction(&*(mutator->iitInTmp));
+    }
     if (!res) {
       replaceRandomUsage(&*(mutator->iitInTmp));
     }
@@ -225,6 +217,7 @@ bool MutateInstructionHelper::insertRandomBinaryInstruction(
 void MutateInstructionHelper::replaceRandomUsage(llvm::Instruction *inst) {
   bool found = false;
   size_t pos = Random::getRandomUnsigned() % inst->getNumOperands();
+  bool isGEP=llvm::isa<llvm::GetElementPtrInst>(inst);
   // make sure at least one
   for (size_t i = 0; !found && i < mutator->iitInTmp->getNumOperands();
        i++, pos++) {
@@ -232,6 +225,9 @@ void MutateInstructionHelper::replaceRandomUsage(llvm::Instruction *inst) {
       pos = 0;
     }
     if (canMutate(mutator->iitInTmp->getOperand(pos))) {
+      if(isGEP && mutator->iitInTmp->getOperand(pos)->getType()->isIntegerTy()){
+        continue;
+      }
       found = true;
       break;
     }
@@ -594,7 +590,17 @@ void FunctionAttributeHelper::init() {
     if (ait->getType()->isPointerTy()) {
       ptrPos.push_back(index);
     } else if (ait->getType()->isIntegerTy()) {
-      intPos.push_back(index);
+      llvm::IntegerType *intTy = (llvm::IntegerType *)ait->getType();
+      size_t bitWidth = intTy->getBitWidth();
+      if (disableEXT.find(bitWidth) != disableEXT.end()) {
+        // do nothing
+      } else if (disableSEXT.find(bitWidth) != disableSEXT.end()) {
+        onlyZEXTPos.push_back(index);
+      } else if (disableZEXT.find(bitWidth) != disableZEXT.end()) {
+        onlySEXTPos.push_back(index);
+      } else {
+        bothEXTPos.push_back(index);
+      }
     }
   }
 }
@@ -627,11 +633,22 @@ void FunctionAttributeHelper::mutate() {
   llvm::Function *func = mutator->currentFunction;
   setFuncAttr(llvm::Attribute::AttrKind::NoFree, Random::getRandomBool());
   if (func->getReturnType()->isIntegerTy()) {
-    setFuncRetAttr(llvm::Attribute::AttrKind::ZExt, false);
-    setFuncRetAttr(llvm::Attribute::AttrKind::SExt, false);
-    setFuncRetAttr(Random::getRandomBool() ? llvm::Attribute::AttrKind::ZExt
-                                           : llvm::Attribute::AttrKind::SExt,
-                   Random::getRandomBool());
+    llvm::IntegerType *intTy = (llvm::IntegerType *)func->getReturnType();
+    size_t bitWidth = intTy->getBitWidth();
+    if (disableEXT.find(bitWidth) == disableEXT.end()) {
+      setFuncRetAttr(llvm::Attribute::AttrKind::ZExt, false);
+      setFuncRetAttr(llvm::Attribute::AttrKind::SExt, false);
+      if (disableZEXT.find(bitWidth) != disableZEXT.end()) {
+        setFuncRetAttr(llvm::Attribute::AttrKind::SExt, Random::getRandomBool());
+      } else if (disableSEXT.find(bitWidth) != disableSEXT.end()) {
+        setFuncRetAttr(llvm::Attribute::AttrKind::ZExt, Random::getRandomBool());
+      } else {
+        setFuncRetAttr(Random::getRandomBool()
+                           ? llvm::Attribute::AttrKind::ZExt
+                           : llvm::Attribute::AttrKind::SExt,
+                       Random::getRandomBool());
+      }
+    }
   }
   for (size_t index : ptrPos) {
     setFuncParamAttr(index, llvm::Attribute::AttrKind::NoCapture,
@@ -640,7 +657,18 @@ void FunctionAttributeHelper::mutate() {
     func->addDereferenceableParamAttr(index,
                                       1 << (Random::getRandomUnsigned() % 4));
   }
-  for (size_t index : intPos) {
+  for (size_t index : onlySEXTPos) {
+    setFuncParamAttr(index, llvm::Attribute::AttrKind::ZExt, false);
+    setFuncParamAttr(index, llvm::Attribute::AttrKind::SExt,
+                     Random::getRandomBool());
+  }
+  for (size_t index : onlySEXTPos) {
+    setFuncParamAttr(index, llvm::Attribute::AttrKind::SExt, false);
+    setFuncParamAttr(index, llvm::Attribute::AttrKind::ZExt,
+                     Random::getRandomBool());
+  }
+
+  for (size_t index : bothEXTPos) {
     setFuncParamAttr(index, llvm::Attribute::AttrKind::ZExt, false);
     setFuncParamAttr(index, llvm::Attribute::AttrKind::SExt, false);
     setFuncParamAttr(index,
@@ -831,12 +859,12 @@ ResizeIntegerHelper::constructUseChain(llvm::Instruction *startPoint) {
   bool hasNext = false;
   do {
     hasNext = false;
-    if(!cur->use_empty()){
+    if (!cur->use_empty()) {
       size_t i = 0;
       auto use_it = cur->use_begin();
       // reset use_it at random pos
-      for (size_t tmp = Random::getRandomUnsigned() % cur->getNumUses(); tmp != 0;
-          --tmp, ++use_it)
+      for (size_t tmp = Random::getRandomUnsigned() % cur->getNumUses();
+           tmp != 0; --tmp, ++use_it)
         ;
       // reset end
 
@@ -845,7 +873,8 @@ ResizeIntegerHelper::constructUseChain(llvm::Instruction *startPoint) {
           use_it = cur->use_begin();
         }
         llvm::Value *val = use_it->getUser();
-        if (isValidNode(val) && std::find(res.begin(),res.end(),val)==res.end()) {
+        if (isValidNode(val) &&
+            std::find(res.begin(), res.end(), val) == res.end()) {
           hasNext = true;
           res.push_back(cur);
           cur = (llvm::Instruction *)val;
@@ -929,19 +958,20 @@ void ResizeIntegerHelper::resizeOperand(llvm::Instruction *inst, size_t index,
   inst->setOperand(index, newOp);
 }
 
-void ResizeIntegerHelper::mutate(){
-  llvm::Instruction* inst=&*mutator->iitInTmp;
-  std::vector<llvm::Instruction*> useChain=constructUseChain(inst);
-  llvm::IntegerType * oldIntTy=(llvm::IntegerType*)inst->getType(),*newIntTy=oldIntTy;
-  do{
-    newIntTy=getNewIntegerTy(inst->getContext());
-  }while(newIntTy==oldIntTy);
-  updateChain(useChain,newIntTy);
-  updated=true;
+void ResizeIntegerHelper::mutate() {
+  llvm::Instruction *inst = &*mutator->iitInTmp;
+  std::vector<llvm::Instruction *> useChain = constructUseChain(inst);
+  llvm::IntegerType *oldIntTy = (llvm::IntegerType *)inst->getType(),
+                    *newIntTy = oldIntTy;
+  do {
+    newIntTy = getNewIntegerTy(inst->getContext());
+  } while (newIntTy == oldIntTy);
+  updateChain(useChain, newIntTy);
+  updated = true;
 }
 
-void ResizeIntegerHelper::debug(){
-  llvm::errs()<<"integer resized\n";
+void ResizeIntegerHelper::debug() {
+  llvm::errs() << "integer resized\n";
   mutator->iitInTmp->getParent()->print(llvm::errs());
-  llvm::errs()<<"\n";
+  llvm::errs() << "\n";
 }
