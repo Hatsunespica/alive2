@@ -2082,6 +2082,7 @@ Memory::refined(const Memory &other, bool fncall,
   set<expr> undef_vars;
 
   AliasSet block_alias(*this, other);
+
   auto min_read_sz = bits_byte / 8;
   for (auto &[mem, set]
          : { make_pair(this, set_ptrs), make_pair(&other, set_ptrs2)}) {
