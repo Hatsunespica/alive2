@@ -16,12 +16,9 @@
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/LegacyPassManager.h"
-#include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -85,7 +82,7 @@ bool is_clangtv = false;
 unique_ptr<Cache> cache;
 unique_ptr<parallel> parallelMgr;
 stringstream parent_ss;
-std::unique_ptr<llvm::Module> MClone;
+std::string SavedBitcode;
 string pass_name;
 
 void sigalarm_handler(int) {
@@ -107,40 +104,40 @@ string toString(const Function &fn) {
   return std::move(ss).str();
 }
 
-static void showStats() {
+void showStats() {
   if (opt_smt_stats)
     smt::solver_print_stats(*out);
   if (opt_alias_stats)
     IR::Memory::printAliasStats(*out);
 }
 
-static void writeBitcodeAtomically(const fs::path report_filename) {
-  fs::path tmp_path;
-  do {
-    auto newname = report_filename.stem();
-    newname += "_" + get_random_str(8) + ".bc";
-    tmp_path.replace_filename(newname);
-  } while (fs::exists(tmp_path));
+void writeBitcode(const fs::path &report_filename) {
+  fs::path bc_filename;
+  if (report_filename.empty()) {
+    bc_filename = get_random_str(8) + ".bc";
+  } else {
+    bc_filename = report_filename;
+    bc_filename.replace_extension("");
+    bc_filename += "_" + get_random_str(4) + ".bc";
+  }
 
-  std::error_code EC;
-  llvm::raw_fd_ostream tmp_file(tmp_path.string(), EC);
-  if (EC) {
-    cerr << "Alive2: Couldn't open temporary bitcode file" << endl;
+  ofstream bc_file(bc_filename);
+  if (!bc_file.is_open()) {
+    cerr << "Alive2: Couldn't open bitcode file" << endl;
     exit(1);
   }
-  llvm::WriteBitcodeToFile(*MClone, tmp_file);
-  tmp_file.close();
-
-  fs::path bc_filename = tmp_path;
-  if (!report_filename.empty()) {
-    bc_filename = report_filename;
-    bc_filename.replace_extension(".bc");
-    std::rename(tmp_path.c_str(), bc_filename.c_str());
-  }
+  bc_file << SavedBitcode;
+  bc_file.close();
   *out << "Wrote bitcode to: " << bc_filename << '\n';
 }
 
-static void emitCommandLine(ostream *out) {
+void saveBitcode(const llvm::Module *M) {
+  SavedBitcode.clear();
+  llvm::raw_string_ostream OS(SavedBitcode);
+  WriteBitcodeToFile(*M, OS);
+}
+
+void emitCommandLine(ostream *out) {
 #ifdef __linux__
   ifstream cmd_args("/proc/self/cmdline");
   if (!cmd_args.is_open()) {
@@ -255,7 +252,8 @@ struct TVLegacyPass final : public llvm::ModulePass {
 
     // Since we have an open connection to the Redis server, we have
     // to do this before forking. Anyway, this is fast.
-    if (cache && cache->lookup(src_tostr + "===\n" + tgt_tostr)) {
+    if (opt_assume_cache_hit ||
+        (cache && cache->lookup(src_tostr + "===\n" + tgt_tostr))) {
       *out << "Skipping repeated query\n\n";
       return;
     }
@@ -326,8 +324,8 @@ struct TVLegacyPass final : public llvm::ModulePass {
         has_failure = true;
         *out << "\nPass: " << pass_name << '\n';
         emitCommandLine(out);
-        if (MClone)
-          writeBitcodeAtomically(report_filename);
+	if (!SavedBitcode.empty())
+	  writeBitcode(report_filename);
         *out << "\n";
       }
       if (opt_error_fatal && has_failure)
@@ -394,7 +392,7 @@ struct TVLegacyPass final : public llvm::ModulePass {
   }
 
   static void finalize() {
-    MClone = nullptr;
+    SavedBitcode.resize(0);
     if (parallelMgr) {
       parallelMgr->finishParent();
       out = out_file.is_open() ? &out_file : &cout;
@@ -672,7 +670,7 @@ llvmGetPassPluginInfo() {
             TVPass::batched_pass_begin_name = "beginning";
 
           if ((is_first || do_start) && opt_save_ir)
-              MClone = llvm::CloneModule(*unwrapModule(IR));
+	    saveBitcode(unwrapModule(IR));
 
           if (is_first || do_start || do_finish)
             runTVPass(*const_cast<llvm::Module *>(unwrapModule(IR)));
@@ -689,7 +687,7 @@ llvmGetPassPluginInfo() {
           PB.getPassInstrumentationCallbacks()
             ->registerBeforeNonSkippedPassCallback(
               [](llvm::StringRef P, llvm::Any IR) {
-                MClone = llvm::CloneModule(*unwrapModule(IR));
+		saveBitcode(unwrapModule(IR));
           });
         }
         PB.getPassInstrumentationCallbacks()->registerAfterPassCallback(

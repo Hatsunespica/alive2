@@ -14,6 +14,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/Operator.h"
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -176,8 +177,8 @@ public:
         out(&get_outs()) {}
 
   ~llvm2alive_() {
+    reset_state();
     for (auto &inst : i_constexprs) {
-      remove_value_name(*inst); // otherwise value_names maintain freed pointers
       inst->deleteValue();
     }
   }
@@ -1665,8 +1666,14 @@ public:
 
       auto storedval = get_operand(gv->getInitializer());
       if (!storedval) {
-        *out << "ERROR: Unsupported constant: " << *gv->getInitializer()
-             << '\n';
+        *out << "ERROR: Unsupported constant: ";
+        stringstream s;
+        s << *gv->getInitializer();
+        auto str = std::move(s).str();
+        if (str.size() > 250)
+          *out << "[too large]\n";
+        else
+          *out << str << '\n';
         return {};
       }
 
