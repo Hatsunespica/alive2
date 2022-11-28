@@ -382,6 +382,11 @@ bool expr::isBool() const {
   return Z3_get_sort_kind(ctx(), sort()) == Z3_BOOL_SORT;
 }
 
+bool expr::isFloat() const {
+  C();
+  return Z3_get_sort_kind(ctx(), sort()) == Z3_FLOATING_POINT_SORT;
+}
+
 bool expr::isTrue() const {
   C();
   return Z3_get_bool_value(ctx(), ast()) == Z3_L_TRUE;
@@ -549,10 +554,34 @@ bool expr::isFPDiv(expr &rounding, expr &lhs, expr &rhs) const {
 }
 
 bool expr::isFPNeg(expr &val) const {
+  if (isBV()) {
+    // extract(signbit, signbit) ^ 1).concat(extract(signbit-1, 0))
+    expr sign, rest, a, b, val, val2;
+    unsigned high, high2, low;
+    auto check_not = [&](const expr &a, const expr &b) {
+      unsigned l;
+      return a.isExtract(val, high, l) && b.isAllOnes() && b.bits() == 1;
+    };
+    return isConcat(sign, rest) &&
+           sign.isBinOp(a, b, Z3_OP_BXOR) &&
+           (check_not(a, b) || check_not(b, a)) &&
+           rest.isExtract(val2, high2, low) &&
+           low == 0 && high2 == high - 1 &&
+           val.eq(val2);
+  }
   return isUnOp(val, Z3_OP_FPA_NEG);
 }
 
 bool expr::isIsFPZero() const {
+  if (isBV()) {
+    // extract(bits()-2, 0) == 0
+    expr lhs, rhs, v;
+    unsigned high, low;
+    return isEq(lhs, rhs) &&
+           lhs.isExtract(v, high, low) &&
+           high == bits()-2 && low == 0 &&
+           rhs.isZero();
+  }
   return isAppOf(Z3_OP_FPA_IS_ZERO);
 }
 
@@ -1056,20 +1085,35 @@ expr expr::abs() const {
 
 expr expr::isNaN() const {
   fold_fp_neg(isNaN);
+
+  expr v;
+  if (isFPNeg(v))
+    return v.isNaN();
+
   return unop_fold(Z3_mk_fpa_is_nan);
 }
 
 expr expr::isInf() const {
   fold_fp_neg(isInf);
+
+  expr v;
+  if (isFPNeg(v))
+    return v.isInf();
+
   return unop_fold(Z3_mk_fpa_is_infinite);
 }
 
 expr expr::isFPZero() const {
-  fold_fp_neg(isFPZero);
+  if (isBV())
+    return extract(bits()-2, 0) == 0;
   return unop_fold(Z3_mk_fpa_is_zero);
 }
 
 expr expr::isFPNegative() const {
+  if (isBV()) {
+    auto signbit = bits() - 1;
+    return extract(signbit, signbit) == 1;
+  }
   return unop_fold(Z3_mk_fpa_is_negative);
 }
 
@@ -1126,11 +1170,19 @@ expr expr::fdiv(const expr &rhs, const expr &rm) const {
 }
 
 expr expr::fabs() const {
+  if (isBV())
+    return expr::mkUInt(0, 1).concat(extract(bits() - 2, 0));
+
   fold_fp_neg(fabs);
   return unop_fold(Z3_mk_fpa_abs);
 }
 
 expr expr::fneg() const {
+  if (isBV()) {
+    auto signbit = bits() - 1;
+    return (extract(signbit, signbit) ^ expr::mkUInt(1, 1))
+             .concat(extract(signbit - 1, 0));
+  }
   return unop_fold(Z3_mk_fpa_neg);
 }
 
@@ -1819,7 +1871,8 @@ expr expr::BV2float(const expr &type) const {
 
 expr expr::float2Float(const expr &type, const expr &rm) const {
   C(type, rm);
-  return Z3_mk_fpa_to_fp_float(ctx(), rm(), ast(), type.sort());
+  return simplify_const(Z3_mk_fpa_to_fp_float(ctx(), rm(), ast(), type.sort()),
+                        *this);
 }
 
 expr expr::fp2sint(unsigned bits, const expr &rm) const {

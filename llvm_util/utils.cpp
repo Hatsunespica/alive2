@@ -140,11 +140,16 @@ Type* llvm_type2alive(const llvm::Type *ty) {
     return ptr_types[as].get();
   }
   case llvm::Type::StructTyID: {
+    auto strty = cast<llvm::StructType>(ty);
+    // 8 bits should be plenty to represent all unique values of this type
+    // in the program
+    if (strty->isOpaque())
+      return &get_int_type(8);
+
     auto &cache = type_cache[ty];
     if (!cache) {
       vector<Type*> elems;
       vector<bool> is_padding;
-      auto strty = cast<llvm::StructType>(ty);
       auto layout = DL->getStructLayout(const_cast<llvm::StructType *>(strty));
       for (unsigned i = 0; i < strty->getNumElements(); ++i) {
         auto e = strty->getElementType(i);
@@ -259,24 +264,10 @@ Value* get_operand(llvm::Value *v,
 
   if (auto cnst = dyn_cast<llvm::ConstantFP>(v)) {
     auto &apfloat = cnst->getValueAPF();
-    unique_ptr<FloatConst> c;
-    switch (ty->getAsFloatType()->getFpType()) {
-    case FloatType::Float:
-    case FloatType::BFloat:
-      c = make_unique<FloatConst>(*ty, apfloat.convertToFloat());
-      break;
-    case FloatType::Double:
-      c = make_unique<FloatConst>(*ty, apfloat.convertToDouble());
-      break;
-    case FloatType::Half:
-    case FloatType::Quad:
-      c = make_unique<FloatConst>(*ty,
-                                  toString(apfloat.bitcastToAPInt(), 10, false),
-                                  true);
-      break;
-    case FloatType::Unknown:
-      UNREACHABLE();
-    }
+    auto c
+     = make_unique<FloatConst>(*ty,
+                               toString(apfloat.bitcastToAPInt(), 10, false),
+                               true);
     auto ret = c.get();
     current_fn->addConstant(std::move(c));
     RETURN_CACHE(ret);
@@ -395,6 +386,15 @@ Value* get_operand(llvm::Value *v,
 
   if (auto cexpr = dyn_cast<llvm::ConstantExpr>(v)) {
     return constexpr_conv(cexpr);
+  }
+
+  // This must be an operand of an unreachable instruction as the operand
+  // hasn't been seen yet
+  if (isa<llvm::Instruction>(v)) {
+    auto val = make_unique<PoisonValue>(*ty);
+    auto ret = val.get();
+    current_fn->addConstant(std::move(val));
+    return ret;
   }
 
   return nullptr;

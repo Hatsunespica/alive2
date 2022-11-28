@@ -14,6 +14,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/ModRef.h"
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -848,6 +849,7 @@ public:
     case llvm::Intrinsic::bitreverse:
     case llvm::Intrinsic::bswap:
     case llvm::Intrinsic::ctpop:
+    case llvm::Intrinsic::arithmetic_fence:
     case llvm::Intrinsic::expect:
     case llvm::Intrinsic::expect_with_probability:
     case llvm::Intrinsic::is_constant: {
@@ -857,6 +859,7 @@ public:
       case llvm::Intrinsic::bitreverse:  op = UnaryOp::BitReverse; break;
       case llvm::Intrinsic::bswap:       op = UnaryOp::BSwap; break;
       case llvm::Intrinsic::ctpop:       op = UnaryOp::Ctpop; break;
+      case llvm::Intrinsic::arithmetic_fence:
       case llvm::Intrinsic::expect:
       case llvm::Intrinsic::expect_with_probability:
         op = UnaryOp::Copy; break;
@@ -967,6 +970,7 @@ public:
         make_unique<FpBinOp>(*ty, value_name(i), *a, *b, op, parse_fmath(i),
                              parse_rounding(i), parse_exceptions(i)));
     }
+    case llvm::Intrinsic::canonicalize:
     case llvm::Intrinsic::fabs:
     case llvm::Intrinsic::ceil:
     case llvm::Intrinsic::experimental_constrained_ceil:
@@ -988,6 +992,7 @@ public:
       PARSE_UNOP();
       FpUnaryOp::Op op;
       switch (i.getIntrinsicID()) {
+      case llvm::Intrinsic::canonicalize:                       op = FpUnaryOp::Canonicalize; break;
       case llvm::Intrinsic::fabs:                               op = FpUnaryOp::FAbs; break;
       case llvm::Intrinsic::ceil:
       case llvm::Intrinsic::experimental_constrained_ceil:      op = FpUnaryOp::Ceil; break;
@@ -1082,7 +1087,6 @@ public:
     case llvm::Intrinsic::sideeffect: {
       FnAttrs attrs;
       parse_fn_attrs(i, attrs);
-      attrs.set(FnAttrs::InaccessibleMemOnly);
       attrs.set(FnAttrs::WillReturn);
       attrs.set(FnAttrs::NoThrow);
       return
@@ -1411,21 +1415,6 @@ public:
         continue;
 
       switch (llvmattr.getKindAsEnum()) {
-      case llvm::Attribute::ReadOnly:
-        attrs.set(FnAttrs::NoWrite);
-        attrs.set(FnAttrs::NoFree);
-        break;
-
-      case llvm::Attribute::ReadNone:
-        attrs.set(FnAttrs::NoRead);
-        attrs.set(FnAttrs::NoWrite);
-        attrs.set(FnAttrs::NoFree);
-        break;
-
-      case llvm::Attribute::WriteOnly:
-        attrs.set(FnAttrs::NoRead);
-        break;
-
       case llvm::Attribute::NoFree:
         attrs.set(FnAttrs::NoFree);
         break;
@@ -1473,6 +1462,29 @@ public:
     }
   }
 
+  MemoryAccess handleMemAttrs(const llvm::MemoryEffects &e) {
+    MemoryAccess attrs;
+    attrs.setNoAccess();
+
+    array<pair<llvm::MemoryEffects::Location, MemoryAccess::AccessType>, 4> tys
+    {
+      make_pair(llvm::MemoryEffects::ArgMem,          MemoryAccess::Args),
+      make_pair(llvm::MemoryEffects::InaccessibleMem,
+                MemoryAccess::Inaccessible),
+      make_pair(llvm::MemoryEffects::Other,           MemoryAccess::Other),
+      make_pair(llvm::MemoryEffects::Other,           MemoryAccess::Errno),
+    };
+
+    for (auto &[ef, ty] : tys) {
+      auto modref = e.getModRef(ef);
+      if (isModSet(modref))
+        attrs.setCanAlsoWrite(ty);
+      if (isRefSet(modref))
+        attrs.setCanAlsoRead(ty);
+    }
+    return attrs;
+  }
+
   void parse_fn_attrs(const llvm::CallInst &i, FnAttrs &attrs) {
     auto fn = i.getCalledFunction();
     llvm::AttributeList attrs_callsite = i.getAttributes();
@@ -1485,6 +1497,10 @@ public:
     handleRetAttrs(attrs_fndef.getAttributes(ret), attrs);
     handleFnAttrs(attrs_callsite.getAttributes(fnidx), attrs);
     handleFnAttrs(attrs_fndef.getAttributes(fnidx), attrs);
+    attrs.mem = handleMemAttrs(i.getMemoryEffects());
+    if (fn)
+      attrs.mem &= handleMemAttrs(fn->getMemoryEffects());
+    attrs.inferImpliedAttributes();
   }
 
 
@@ -1552,6 +1568,8 @@ public:
     const auto &fnidx = llvm::AttributeList::FunctionIndex;
     handleRetAttrs(attrlist.getAttributes(ridx), attrs);
     handleFnAttrs(attrlist.getAttributes(fnidx), attrs);
+    attrs.mem = handleMemAttrs(f.getMemoryEffects());
+    attrs.inferImpliedAttributes();
 
     // create all BBs upfront in topological order
     vector<pair<BasicBlock*, llvm::BasicBlock*>> sorted_bbs;

@@ -61,7 +61,7 @@ static void print_single_varval(ostream &os, const State &st, const Model &m,
 
   expr partial = m.eval(val.value);
 
-  type.printVal(os, st, m.eval(val.value, true));
+  type.printVal(os, st, m, m.eval(val.value, true));
 
   // undef variables may not have a model since each read uses a copy
   // TODO: add intervals of possible values for ints at least?
@@ -212,6 +212,9 @@ static bool error(Errors &errs, const State &src_state, const State &tgt_state,
         if (m.eval(val.return_domain).isFalse()) {
           s << *var << " = function did not return!\n";
           break;
+        } else if (m.eval(val.domain).isFalse()) {
+          s << "Function " << call->getFnName() << " triggered UB\n";
+          continue;
         } else if (var->isVoid()) {
           s << "Function " << call->getFnName() << " returned\n";
           continue;
@@ -367,6 +370,8 @@ static expr encode_undef_refinement(const Type &type, const State::ValTy &a,
   //   forall I .
   //    (forall N . src_nonpoison(I, N) /\ retval_src(I, N) == retval_src(I, 0))
   //      -> (forall N . retval_tgt(I, N) == retval_tgt(I, 0)
+  // FIXME? this is an approximation. Instead of 0, it should be N' because
+  // 0 may fail a precondition.
 
   if (dynamic_cast<const VoidType *>(&type))
     return false;
@@ -900,11 +905,16 @@ static void calculateAndInitConstants(Transform &t) {
       if (auto fn = dynamic_cast<const FnCall*>(&i)) {
         has_fncall |= true;
         if (!fn->getAttributes().isAlloc()) {
-          if (fn->hasAttribute(FnAttrs::InaccessibleMemOnly)) {
+          if (fn->getAttributes().mem.canOnlyWrite(MemoryAccess::Inaccessible)) {
             if (inaccessiblememonly_fns.emplace(fn->getName()).second)
               ++num_inaccessiblememonly_fns;
           } else {
-            has_write_fncall |= !fn->hasAttribute(FnAttrs::NoWrite);
+            if (fn->getAttributes().mem
+                                   .canOnlyRead(MemoryAccess::Inaccessible)) {
+              if (inaccessiblememonly_fns.emplace(fn->getName()).second)
+                ++num_inaccessiblememonly_fns;
+            }
+            has_write_fncall |= fn->getAttributes().mem.canWriteSomething();
           }
         }
       }
