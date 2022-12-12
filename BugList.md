@@ -76,6 +76,8 @@ Please contact us or submit a PR if something is missing or inaccurate.
 69. IRCE introduces UB by changing order of condition checks (https://llvm.org/PR57523)
 70. LoopIdiomRecognizer creates memset_pattern16 with incorrect size type with custom dl (https://llvm.org/PR57679)
 71. InstSimplify: xor pattern miscompiles undef lane (https://llvm.org/PR58977)
+72. llvm.canonicalize() folding incorrect for denormals (https://llvm.org/PR59245)
+73. InstCombine: incorrect fabs formation (https://llvm.org/PR59279)
 
 
 ### Bugs found in Z3

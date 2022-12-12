@@ -308,8 +308,7 @@ expr VoidType::mkInput(State &s, const char *name,
   UNREACHABLE();
 }
 
-void VoidType::printVal(ostream &os, const State &s, const Model &m,
-                        const expr &e) const {
+void VoidType::printVal(ostream &os, const State &s, const expr &e) const {
   UNREACHABLE();
 }
 
@@ -368,8 +367,7 @@ expr IntType::mkInput(State &s, const char *name,
   return expr::mkVar(name, bits());
 }
 
-void IntType::printVal(ostream &os, const State &s, const Model &m,
-                       const expr &e) const {
+void IntType::printVal(ostream &os, const State &s, const expr &e) const {
   e.printHexadecimal(os);
   os << " (";
   e.printUnsigned(os);
@@ -434,13 +432,11 @@ expr FloatType::mkNaN(State &s, bool canonical) const {
   // NaN has a non-deterministic non-zero fraction bit pattern
   expr zero = expr::mkUInt(0, var_bits);
   expr var = canonical ? expr::mkVar("#NaN_canonical", zero)
-                       : expr::mkFreshVar("#NaN", zero);
+                       : s.getFreshNondetVar("#NaN", zero);
   expr fraction = var.extract(fraction_bits - 1, 0);
 
   s.addPre(fraction != 0);
-  s.addPre(expr::mkUF("isQNaN", { fraction }, false));
-  if (!canonical)
-    s.addQuantVar(var);
+  // TODO s.addPre(expr::mkUF("isQNaN", { fraction }, false));
 
   // sign bit, exponent (-1), fraction (non-zero)
   return var.extract(fraction_bits, fraction_bits)
@@ -462,11 +458,15 @@ expr FloatType::isNaN(const expr &v, bool signalling) const {
   unsigned fraction_bits = bits() - exp_bits - 1;
 
   expr exponent = v.extract(fraction_bits + exp_bits - 1, fraction_bits);
-  expr fraction = v.extract(fraction_bits - 1, 0);
-  expr isqnan = expr::mkUF("isQNaN", { fraction }, false);
-  if (signalling)
-    isqnan = !isqnan;
-  return exponent == -1u && fraction != 0 && isqnan;
+  expr nanqbit = exponent.extract(exp_bits - 1, exp_bits - 1);
+  expr isqnan;
+  if (signalling) {
+    expr fraction = v.extract(fraction_bits - 1, 0);
+    isqnan = nanqbit == 0 && fraction != 0;
+  } else {
+    isqnan = nanqbit == 1;
+  }
+  return exponent == -1u && isqnan;
 }
 
 unsigned FloatType::bits() const {
@@ -559,14 +559,13 @@ expr FloatType::mkInput(State &s, const char *name,
   return expr::mkVar(name, bits());
 }
 
-void FloatType::printVal(ostream &os, const State &s, const Model &m,
-                         const expr &e) const {
+void FloatType::printVal(ostream &os, const State &s, const expr &e) const {
   e.printHexadecimal(os);
   auto f = getFloat(e);
   os << " (";
-  if (m.eval(isNaN(e, true)).isTrue()) {
+  if (isNaN(e, true).isTrue()) {
     os << "SNaN";
-  } else if (m.eval(isNaN(e, false)).isTrue()) {
+  } else if (isNaN(e, false).isTrue()) {
     os << "QNaN";
   } else if (f.isNaN().isTrue()) {
     os << "NaN";
@@ -682,8 +681,7 @@ PtrType::mkUndefInput(State &s, const ParamAttrs &attrs) const {
   return s.getMemory().mkUndefInput(attrs);
 }
 
-void PtrType::printVal(ostream &os, const State &s, const Model &m,
-                       const expr &e) const {
+void PtrType::printVal(ostream &os, const State &s, const expr &e) const {
   os << Pointer(s.getMemory(), e);
 }
 
@@ -973,8 +971,7 @@ unsigned AggregateType::numPointerElements() const {
   return count;
 }
 
-void AggregateType::printVal(ostream &os, const State &s, const Model &m,
-                             const expr &e) const {
+void AggregateType::printVal(ostream &os, const State &s, const expr &e) const {
   UNREACHABLE();
 }
 
@@ -1399,9 +1396,8 @@ SymbolicType::mkUndefInput(State &st, const ParamAttrs &attrs) const {
   DISPATCH(mkUndefInput(st, attrs), UNREACHABLE());
 }
 
-void SymbolicType::printVal(ostream &os, const State &st, const Model &m,
-                            const expr &e) const {
-  DISPATCH(printVal(os, st, m, e), UNREACHABLE());
+void SymbolicType::printVal(ostream &os, const State &st, const expr &e) const {
+  DISPATCH(printVal(os, st, e), UNREACHABLE());
 }
 
 void SymbolicType::print(ostream &os) const {

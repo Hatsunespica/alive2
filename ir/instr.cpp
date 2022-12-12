@@ -127,7 +127,7 @@ BinOp::BinOp(Type &type, string &&name, Value &lhs, Value &rhs, Op op,
     assert((flags & Exact) == flags);
     break;
   default:
-    assert(flags == None);
+    assert((flags & NoUndef) == flags);
     break;
   }
 }
@@ -191,6 +191,8 @@ void BinOp::print(ostream &os) const {
   if (flags & Exact)
     os << "exact ";
   os << *lhs << ", " << rhs->getName();
+  if (flags & NoUndef)
+    os << ", !noundef";
 }
 
 static void div_ub(State &s, const expr &a, const expr &b, const expr &ap,
@@ -448,24 +450,33 @@ StateValue BinOp::toSMT(State &s) const {
     break;
   }
 
+  bool noundef = flags & NoUndef;
   function<pair<StateValue,StateValue>(const expr&, const expr&, const expr&,
                                        const expr&)> zip_op;
   if (vertical_zip) {
     zip_op = [&](auto &a, auto &ap, auto &b, auto &bp) {
       auto [v1, v2] = fn(a, ap, b, bp);
       expr non_poison = ap && bp;
+      if (noundef) {
+        s.addUB(std::move(non_poison));
+        non_poison = true;
+      }
       StateValue sv1(std::move(v1), expr(non_poison));
       return make_pair(std::move(sv1), StateValue(std::move(v2), std::move(non_poison)));
     };
   } else {
     scalar_op = [&](auto &a, auto &ap, auto &b, auto &bp) -> StateValue {
       auto [v, np] = fn(a, ap, b, bp);
+      if (noundef) {
+        s.addUB(std::move(np));
+        np = true;
+      }
       return { std::move(v), ap && bp && np };
     };
   }
 
-  auto &a = s[*lhs];
-  auto &b = isDivOrRem() ? s.getAndAddPoisonUB(*rhs) : s[*rhs];
+  auto &a = noundef ? s.getAndAddPoisonUB(*lhs) : s[*lhs];
+  auto &b = (isDivOrRem() || noundef) ? s.getAndAddPoisonUB(*rhs) : s[*rhs];
 
   if (lhs->getType().isVectorType()) {
     auto retty = getType().getAsAggregateType();
@@ -624,8 +635,7 @@ static expr any_fp_zero(State &s, const expr &v) {
     }
   }
 
-  expr var = expr::mkFreshVar("anyzero", true);
-  s.addQuantVar(var);
+  expr var = s.getFreshNondetVar("anyzero", true);
   return expr::mkIf(var && is_zero, v.fneg(), v);
 }
 
@@ -748,38 +758,7 @@ static StateValue fm_poison(State &s, expr a, const expr &ap, expr b,
   if (!bitwise && val.isFloat()) {
     val = handle_subnormal(s.getFn().getFnAttrs().getFPDenormal(ty).output,
                            std::move(val));
-
-    // optimization to prevent variables from NaN conversion
-    if (fp_a.isNaN().isTrue() || fp_b.isNaN().isTrue() || fp_c.isNaN().isTrue())
-      val = expr::mkNumber("0", val);
-
     val = fpty->fromFloat(s, val);
-
-    // if any of the inputs is NaN, pick one of the NaN bit-patterns
-    // non-deterministically
-
-    // TODO: must be a quiet nan, otherwise gets "quieted" somehow
-    if (!(fmath.flags & FastMathFlags::NNaN)) {
-      auto canonical_nan = fpty->mkNaN(s, true);
-      expr var;
-      if (nary == 1) {
-        var = expr::mkFreshVar("#picknan", false);
-        val = expr::mkIf(fp_a.isNaN(), expr::mkIf(var, a, canonical_nan), val);
-      } else if (nary == 2) {
-        var = expr::mkFreshVar("#picknan", expr::mkUInt(0, 2));
-        val = expr::mkIf(!fp_a.isNaN() && !fp_b.isNaN(), val,
-                expr::mkIf(fp_a.isNaN() && var == 0, a,
-                  expr::mkIf(fp_b.isNaN() && var == 1, b, canonical_nan)));
-      } else {
-        assert(nary == 3);
-        var = expr::mkFreshVar("#picknan", expr::mkUInt(0, 2));
-        val = expr::mkIf(!fp_a.isNaN() && !fp_b.isNaN() && !fp_c.isNaN(), val,
-                expr::mkIf(fp_a.isNaN() && var == 0, a,
-                  expr::mkIf(fp_b.isNaN() && var == 1, b,
-                    expr::mkIf(fp_c.isNaN() && var == 2, c, canonical_nan))));
-      }
-      s.addQuantVar(var);
-    }
   }
 
   return { std::move(val), non_poison() };
@@ -809,36 +788,36 @@ static StateValue fm_poison(State &s, expr a, const expr &ap,
 }
 
 StateValue FpBinOp::toSMT(State &s) const {
-  function<expr(const expr&, const expr&, const Type&, FpRoundingMode)> fn;
+  function<expr(const expr&, const expr&, FpRoundingMode)> fn;
   bool bitwise = false;
 
   switch (op) {
   case FAdd:
-    fn = [](const expr &a, const expr &b, const Type &ty, FpRoundingMode rm) {
+    fn = [](const expr &a, const expr &b, FpRoundingMode rm) {
       return a.fadd(b, rm.toSMT());
     };
     break;
 
   case FSub:
-    fn = [](const expr &a, const expr &b, const Type &ty, FpRoundingMode rm) {
+    fn = [](const expr &a, const expr &b, FpRoundingMode rm) {
       return a.fsub(b, rm.toSMT());
     };
     break;
 
   case FMul:
-    fn = [](const expr &a, const expr &b, const Type &ty, FpRoundingMode rm) {
+    fn = [](const expr &a, const expr &b, FpRoundingMode rm) {
       return a.fmul(b, rm.toSMT());
     };
     break;
 
   case FDiv:
-    fn = [](const expr &a, const expr &b, const Type &ty, FpRoundingMode rm) {
+    fn = [](const expr &a, const expr &b, FpRoundingMode rm) {
       return a.fdiv(b, rm.toSMT());
     };
     break;
 
   case FRem:
-    fn = [&](const expr &a, const expr &b, const Type &ty, FpRoundingMode rm) {
+    fn = [&](const expr &a, const expr &b, FpRoundingMode rm) {
       // TODO; Z3 has no support for LLVM's frem which is actually an fmod
       auto val = expr::mkUF("fmod", {a, b}, a);
       s.doesApproximation("frem", val);
@@ -848,21 +827,15 @@ StateValue FpBinOp::toSMT(State &s) const {
 
   case FMin:
   case FMax:
-    bitwise = true;
-    fn = [&](const expr &a, const expr &b, const Type &ty, FpRoundingMode rm) {
-      auto fpty = ty.getAsFloatType();
-      expr fp_a = fpty->getFloat(a);
-      expr fp_b = fpty->getFloat(b);
-
-      expr ndet = expr::mkFreshVar("maxminnondet", true);
-      s.addQuantVar(ndet);
-      auto ndz = expr::mkIf(ndet, expr::mkNumber("0", fp_a).float2BV(),
-                            expr::mkNumber("-0", fp_a).float2BV());
+    fn = [&](const expr &a, const expr &b, FpRoundingMode rm) {
+      expr ndet = s.getFreshNondetVar("maxminnondet", true);
+      auto ndz = expr::mkIf(ndet, expr::mkNumber("0", a),
+                            expr::mkNumber("-0", a));
 
       expr z = a.isFPZero() && b.isFPZero();
-      expr cmp = op == FMin ? fp_a.fole(fp_b) : fp_a.foge(fp_b);
-      return expr::mkIf(fp_a.isNaN(), b,
-                        expr::mkIf(fp_b.isNaN(), a,
+      expr cmp = op == FMin ? a.fole(b) : a.foge(b);
+      return expr::mkIf(a.isNaN(), b,
+                        expr::mkIf(b.isNaN(), a,
                                    expr::mkIf(z, ndz,
                                               expr::mkIf(cmp, a, b))));
     };
@@ -870,7 +843,7 @@ StateValue FpBinOp::toSMT(State &s) const {
 
   case FMinimum:
   case FMaximum:
-    fn = [&](const expr &a, const expr &b, const Type &ty, FpRoundingMode rm) {
+    fn = [&](const expr &a, const expr &b, FpRoundingMode rm) {
       expr zpos = expr::mkNumber("0", a), zneg = expr::mkNumber("-0", a);
       expr cmp = (op == FMinimum) ? a.fole(b) : a.foge(b);
       expr neg_cond = op == FMinimum ? (a.isFPNegative() || b.isFPNegative())
@@ -882,17 +855,18 @@ StateValue FpBinOp::toSMT(State &s) const {
       return expr::mkIf(a.isNaN(), a, expr::mkIf(b.isNaN(), b, e));
     };
     break;
+
   case CopySign:
     bitwise = true;
-    fn = [](const expr &a, const expr &b, const Type &ty, FpRoundingMode rm) {
-      return expr::mkIf(a.isFPNegative() == b.isFPNegative(), a, a.fneg());
+    fn = [](const expr &a, const expr &b, FpRoundingMode rm) {
+      return a.copysign(b);
     };
     break;
   }
 
   auto scalar = [&](const auto &a, const auto &b, const Type &ty) {
     return fm_poison(s, a.value, a.non_poison, b.value, b.non_poison,
-                     [&](auto &a, auto &b, auto rm){ return fn(a, b, ty, rm); },
+                     [&](auto &a, auto &b, auto rm){ return fn(a, b, rm); },
                      ty, fmath, rm, bitwise);
   };
 
@@ -983,9 +957,7 @@ StateValue UnaryOp::toSMT(State &s) const {
       return { std::move(one), true };
 
     // may or may not be a constant
-    expr var = expr::mkFreshVar("is.const", one);
-    s.addQuantVar(var);
-    return { std::move(var), true };
+    return { s.getFreshNondetVar("is.const", one), true };
   }
   case FFS:
     fn = [](auto &v, auto np) -> StateValue {
@@ -1134,7 +1106,7 @@ StateValue FpUnaryOp::toSMT(State &s) const {
   auto scalar = [&](const StateValue &v, const Type &ty) {
     return fm_poison(s, v.value, v.non_poison,
                      [fn](auto &v, auto rm){ return fn(v, rm); }, ty, fmath, rm,
-                     bitwise);
+                     bitwise, false);
   };
 
   auto &v = s[*val];
@@ -1386,8 +1358,7 @@ StateValue FpTernaryOp::toSMT(State &s) const {
   case MulAdd:
     fn = [&](const expr &a, const expr &b, const expr &c, FpRoundingMode rm0) {
       auto rm = rm0.toSMT();
-      expr var = expr::mkFreshVar("nondet", expr(false));
-      s.addQuantVar(var);
+      expr var = s.getFreshNondetVar("nondet", expr(false));
       return expr::mkIf(var, expr::fma(a, b, c, rm), a.fmul(b, rm).fadd(c, rm));
     };
     break;
@@ -1716,9 +1687,11 @@ StateValue FpConversionOp::toSMT(State &s) const {
   case LRound:
     fn = [&](auto &val, auto &to_type, auto rm_in) -> StateValue {
       expr rm;
+      bool is_poison = false;
       switch (op) {
       case FPToSInt:
         rm = expr::rtz();
+        is_poison = true;
         break;
       case LRInt:
         rm = rm_in.toSMT();
@@ -1732,7 +1705,17 @@ StateValue FpConversionOp::toSMT(State &s) const {
       expr fp2 = bv.sint2fp(val, rm);
       // -0.xx is converted to 0 and then to 0.0, though -0.xx is ok to convert
       expr val_rounded = val.round(rm);
-      return { std::move(bv), val_rounded.isFPZero() || fp2 == val_rounded };
+      expr overflow = val_rounded.isFPZero() || fp2 == val_rounded;
+
+      expr np;
+      if (is_poison) {
+        np = std::move(overflow);
+      } else {
+        np = true;
+        bv = expr::mkIf(overflow, s.getFreshNondetVar("nondet", bv), bv);
+      }
+
+      return { std::move(bv), std::move(np) };
     };
     break;
   case FPToUInt:
@@ -2202,6 +2185,10 @@ static void check_can_load(State &s, const expr &p0) {
   expr readable    = p.isLocal() || p.isConstGlobal();
   expr nonreadable = false;
 
+  if (attrs.has(FnAttrs::NullPointerIsValid) &&
+      attrs.mem.canRead(MemoryAccess::Other))
+    readable |= p.isNull();
+
   (attrs.mem.canRead(MemoryAccess::Args) ? readable : nonreadable)
     |= ptr_only_args(s, p);
 
@@ -2317,7 +2304,7 @@ StateValue FnCall::toSMT(State &s) const {
         sv2 = s.getAndAddPoisonUB(*arg, false);
     } else {
       sv  = s[*arg];
-      sv2 = s[*arg];
+      sv2 = s.eval(*arg, true);
     }
 
     unpack_inputs(s, *arg, arg->getType(), flags, std::move(sv), std::move(sv2),
@@ -3262,7 +3249,7 @@ void StartLifetime::print(ostream &os) const {
 }
 
 StateValue StartLifetime::toSMT(State &s) const {
-  auto &p = s.getAndAddPoisonUB(*ptr, true).value;
+  auto &p = s.getWellDefinedPtr(*ptr);
   s.getMemory().startLifetime(p);
   return {};
 }
@@ -3294,7 +3281,7 @@ void EndLifetime::print(ostream &os) const {
 }
 
 StateValue EndLifetime::toSMT(State &s) const {
-  auto &p = s.getAndAddPoisonUB(*ptr, true).value;
+  auto &p = s.getWellDefinedPtr(*ptr);
   s.getMemory().free(p, true);
   return {};
 }
@@ -3479,7 +3466,7 @@ void Load::print(ostream &os) const {
 }
 
 StateValue Load::toSMT(State &s) const {
-  auto &p = s.getAndAddPoisonUB(*ptr, true).value;
+  auto &p = s.getWellDefinedPtr(*ptr);
   check_can_load(s, p);
   auto [sv, ub] = s.getMemory().load(p, getType(), align);
   s.addUB(std::move(ub));
@@ -3529,7 +3516,7 @@ StateValue Store::toSMT(State &s) const {
     return {};
   }
 
-  auto &p = s.getAndAddPoisonUB(*ptr, true).value;
+  auto &p = s.getWellDefinedPtr(*ptr);
   check_can_store(s, p);
   auto &v = s[*val];
   s.getMemory().store(p, v, val->getType(), align, s.getUndefVars());
@@ -3580,7 +3567,7 @@ StateValue Memset::toSMT(State &s) const {
   uint64_t n;
   expr vptr;
   if (vbytes.isUInt(n) && n > 0) {
-    vptr = s.getAndAddPoisonUB(*ptr, true).value;
+    vptr = s.getWellDefinedPtr(*ptr);
   } else {
     auto &sv_ptr = s[*ptr];
     auto &sv_ptr2 = s[*ptr];
@@ -3641,7 +3628,7 @@ void MemsetPattern::print(ostream &os) const {
 }
 
 StateValue MemsetPattern::toSMT(State &s) const {
-  auto &vptr = s.getAndAddPoisonUB(*ptr, false).value;
+  auto &vptr = s.getWellDefinedPtr(*ptr);
   auto &vpattern = s.getAndAddPoisonUB(*pattern, false).value;
   auto &vbytes = s.getAndAddPoisonUB(*bytes, true).value;
   check_can_store(s, vptr);
@@ -3685,7 +3672,7 @@ void FillPoison::print(ostream &os) const {
 }
 
 StateValue FillPoison::toSMT(State &s) const {
-  auto &vptr = s.getAndAddPoisonUB(*ptr, true).value;
+  auto &vptr = s.getWellDefinedPtr(*ptr);
   Memory &m = s.getMemory();
   m.fillPoison(Pointer(m, vptr).getBid());
   return {};
@@ -3741,7 +3728,7 @@ StateValue Memcpy::toSMT(State &s) const {
   uint64_t n;
   expr vsrc, vdst;
   if (align_dst || (vbytes.isUInt(n) && n > 0)) {
-    vdst = s.getAndAddPoisonUB(*dst, true).value;
+    vdst = s.getWellDefinedPtr(*dst);
   } else {
     auto &sv_dst = s[*dst];
     auto &sv_dst2 = s[*dst];
@@ -3751,7 +3738,7 @@ StateValue Memcpy::toSMT(State &s) const {
   }
 
   if (align_src || (vbytes.isUInt(n) && n > 0)) {
-    vsrc = s.getAndAddPoisonUB(*src, true).value;
+    vsrc = s.getWellDefinedPtr(*src);
   } else {
     auto &sv_src = s[*src];
     auto &sv_src2 = s[*src];
@@ -3829,18 +3816,15 @@ StateValue Memcmp::toSMT(State &s) const {
 
   expr result_var, result_var_neg;
   if (is_bcmp) {
-    result_var = expr::mkFreshVar("bcmp_nonzero", zero);
+    result_var = s.getFreshNondetVar("bcmp_nonzero", zero);
     s.addPre(result_var != zero);
-    s.addQuantVar(result_var);
   } else {
     auto z31 = expr::mkUInt(0, 31);
-    result_var = expr::mkFreshVar("memcmp_nonzero", z31);
+    result_var = s.getFreshNondetVar("memcmp_nonzero", z31);
     s.addPre(result_var != z31);
-    s.addQuantVar(result_var);
     result_var = expr::mkUInt(0, 1).concat(result_var);
 
-    result_var_neg = expr::mkFreshVar("memcmp", z31);
-    s.addQuantVar(result_var_neg);
+    result_var_neg = s.getFreshNondetVar("memcmp", z31);
     result_var_neg = expr::mkUInt(1, 1).concat(result_var_neg);
   }
 
@@ -3920,7 +3904,7 @@ void Strlen::print(ostream &os) const {
 }
 
 StateValue Strlen::toSMT(State &s) const {
-  auto &eptr = s.getAndAddPoisonUB(*ptr, true).value;
+  auto &eptr = s.getWellDefinedPtr(*ptr);
   check_can_load(s, eptr);
 
   Pointer p(s.getMemory(), eptr);
@@ -3967,7 +3951,7 @@ StateValue VaStart::toSMT(State &s) const {
   s.addUB(expr(s.getFn().isVarArgs()));
 
   auto &data  = s.getVarArgsData();
-  auto &raw_p = s.getAndAddPoisonUB(*ptr, true).value;
+  auto &raw_p = s.getWellDefinedPtr(*ptr);
 
   expr zero     = expr::mkUInt(0, VARARG_BITS);
   expr num_args = expr::mkVar("num_va_args", VARARG_BITS);
@@ -4042,7 +4026,7 @@ static void ensure_varargs_ptr(D &data, State &s, const expr &arg_ptr) {
 
 StateValue VaEnd::toSMT(State &s) const {
   auto &data  = s.getVarArgsData();
-  auto &raw_p = s.getAndAddPoisonUB(*ptr, true).value;
+  auto &raw_p = s.getWellDefinedPtr(*ptr);
 
   s.addUB(Pointer(s.getMemory(), raw_p).isBlockAlive());
 
@@ -4080,8 +4064,8 @@ void VaCopy::print(ostream &os) const {
 
 StateValue VaCopy::toSMT(State &s) const {
   auto &data = s.getVarArgsData();
-  auto &dst_raw = s.getAndAddPoisonUB(*dst, true).value;
-  auto &src_raw = s.getAndAddPoisonUB(*src, true).value;
+  auto &dst_raw = s.getWellDefinedPtr(*dst);
+  auto &src_raw = s.getWellDefinedPtr(*src);
   Pointer dst(s.getMemory(), dst_raw);
   Pointer src(s.getMemory(), src_raw);
 
@@ -4136,7 +4120,7 @@ void VaArg::print(ostream &os) const {
 
 StateValue VaArg::toSMT(State &s) const {
   auto &data  = s.getVarArgsData();
-  auto &raw_p = s.getAndAddPoisonUB(*ptr, true).value;
+  auto &raw_p = s.getWellDefinedPtr(*ptr);
 
   s.addUB(Pointer(s.getMemory(), raw_p).isBlockAlive());
 

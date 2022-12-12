@@ -112,6 +112,7 @@ private:
   std::set<std::pair<std::string,std::optional<smt::expr>>> used_approximations;
 
   std::set<smt::expr> quantified_vars;
+  std::set<smt::expr> nondet_vars;
 
   // var -> ((value, not_poison), ub, undef_vars)
   std::unordered_map<const Value*, unsigned> values_map;
@@ -197,10 +198,13 @@ public:
 
   /*--- Get values or update registers ---*/
   const ValTy& exec(const Value &v);
-  const StateValue& operator[](const Value &val);
+  const StateValue& eval(const Value &val, bool quantify_nondet);
+  const StateValue& operator[](const Value &val) { return eval(val, false); }
   const StateValue& getAndAddUndefs(const Value &val);
   // If undef_ub is true, UB is also added when val was undef
-  const StateValue& getAndAddPoisonUB(const Value &val, bool undef_ub = false);
+  const StateValue& getAndAddPoisonUB(const Value &val, bool undef_ub = false,
+                                      bool ptr_compare = false);
+  const smt::expr& getWellDefinedPtr(const Value &val);
 
   const ValTy& at(const Value &val) const;
   bool isUndef(const smt::expr &e) const;
@@ -236,6 +240,7 @@ public:
   void doesApproximation(std::string &&name, std::optional<smt::expr> e = {});
   auto& getApproximations() const { return used_approximations; }
 
+  smt::expr getFreshNondetVar(const char *prefix, const smt::expr &type);
   void addQuantVar(const smt::expr &var);
   void addFnQuantVar(const smt::expr &var);
   void addUndefVar(smt::expr &&var);
@@ -259,6 +264,7 @@ public:
   auto& getFnPre() const { return fn_call_pre; }
   const auto& getValues() const { return values; }
   const auto& getQuantVars() const { return quantified_vars; }
+  const auto& getNondetVars() const { return nondet_vars; }
   const auto& getFnQuantVars() const { return fn_call_qvars; }
 
   void saveReturnedInput();
@@ -292,7 +298,8 @@ public:
   void mkAxioms(State &tgt);
 
 private:
-  smt::expr strip_undef_and_add_ub(const Value &val, const smt::expr &e);
+  smt::expr strip_undef_and_add_ub(const Value &val, const smt::expr &e,
+                                   bool isptr);
   void addJump(const BasicBlock &dst, smt::expr &&cond, bool last_jump = false);
 };
 
