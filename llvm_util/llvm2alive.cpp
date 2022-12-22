@@ -57,6 +57,7 @@ FpExceptionMode parse_exceptions(llvm::Instruction &i) {
   }
 }
 
+bool hit_limits;
 unsigned constexpr_idx;
 unsigned copy_idx;
 unsigned alignopbundle_idx;
@@ -133,6 +134,13 @@ class llvm2alive_ : public llvm::InstVisitor<llvm2alive_, unique_ptr<Instr>> {
     llvm::Instruction *newI = cexpr->getAsInstruction();
     newI->setName("__constexpr_" + to_string(constexpr_idx++));
     i_constexprs.push_back(newI);
+
+    // don't bother if the number of instructions exploded
+    if (constexpr_idx > 5'000) {
+      hit_limits = true;
+      *out << "ERROR: Too many constants\n";
+      return {};
+    }
 
     auto ptr = this->visit(*newI);
     if (!ptr)
@@ -1027,6 +1035,7 @@ public:
     case llvm::Intrinsic::experimental_constrained_fptosi:
     case llvm::Intrinsic::experimental_constrained_fptoui:
     case llvm::Intrinsic::experimental_constrained_fpext:
+    case llvm::Intrinsic::fptrunc_round:
     case llvm::Intrinsic::experimental_constrained_fptrunc:
     case llvm::Intrinsic::lrint:
     case llvm::Intrinsic::experimental_constrained_lrint:
@@ -1045,6 +1054,7 @@ public:
       case llvm::Intrinsic::experimental_constrained_fptosi:  op = FpConversionOp::FPToSInt; break;
       case llvm::Intrinsic::experimental_constrained_fptoui:  op = FpConversionOp::FPToUInt; break;
       case llvm::Intrinsic::experimental_constrained_fpext:   op = FpConversionOp::FPExt; break;
+      case llvm::Intrinsic::fptrunc_round:
       case llvm::Intrinsic::experimental_constrained_fptrunc: op = FpConversionOp::FPTrunc; break;
       case llvm::Intrinsic::lrint:
       case llvm::Intrinsic::experimental_constrained_lrint:
@@ -1056,9 +1066,15 @@ public:
       case llvm::Intrinsic::experimental_constrained_llround: op = FpConversionOp::LRound; break;
       default: UNREACHABLE();
       }
+      FnAttrs attrs;
+      parse_fn_attrs(i, attrs);
+      unsigned flags = FpConversionOp::None;
+      if (attrs.has(FnAttrs::NoUndef))
+        flags |= FpConversionOp::NoUndef;
       RETURN_IDENTIFIER(make_unique<FpConversionOp>(*ty, value_name(i), *val,
                                                     op, parse_rounding(i),
-                                                    parse_exceptions(i)));
+                                                    parse_exceptions(i),
+                                                    flags));
     }
     case llvm::Intrinsic::is_fpclass:
     {
@@ -1164,7 +1180,13 @@ public:
   RetTy visitInstruction(llvm::Instruction &i) { return error(i); }
 
   RetTy error(llvm::Instruction &i) {
-    *out << "ERROR: Unsupported instruction: " << i << '\n';
+    if (hit_limits)
+      return {};
+    stringstream ss;
+    ss << i;
+
+    *out << "ERROR: Unsupported instruction: "
+         << string_view(std::move(ss).str()).substr(0, 80) << '\n';
     return {};
   }
   RetTy errorAttr(const llvm::Attribute &attr) {
@@ -1511,6 +1533,7 @@ public:
 
 
   optional<Function> run() {
+    hit_limits = false;
     constexpr_idx = 0;
     copy_idx = 0;
     alignopbundle_idx = 0;
