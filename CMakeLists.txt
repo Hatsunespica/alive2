@@ -119,6 +119,9 @@ add_library(smt STATIC ${SMT_SRCS})
 
 set(TOOLS_SRCS
   tools/transform.cpp
+  tools/mutator-utils/util.cpp
+  tools/mutator-utils/mutator.cpp
+  tools/mutator-utils/mutator_helper.cpp
 )
 
 add_library(tools STATIC ${TOOLS_SRCS})
@@ -206,6 +209,10 @@ if (BUILD_LLVM_UTILS OR BUILD_TV)
   add_llvm_executable(alive-exec
     "tools/alive-exec.cpp"
   )
+  
+  add_llvm_executable(alive-mutate
+    "tools/alive-mutate.cpp"
+  )
 
 else()
   set(LLVM_UTIL_SRCS "")
@@ -248,11 +255,12 @@ add_executable(alive-jobserver
 #add_library(alive2 SHARED ${IR_SRCS} ${SMT_SRCS} ${TOOLS_SRCS} ${UTIL_SRCS} ${LLVM_UTIL_SRCS})
 
 if (BUILD_LLVM_UTILS OR BUILD_TV)
-  llvm_map_components_to_libnames(llvm_libs support core irreader bitwriter analysis passes transformutils)
+  llvm_map_components_to_libnames(llvm_libs support core irreader bitwriter analysis passes transformutils scalaropts)
 #  target_link_libraries(alive2 PRIVATE ${llvm_libs})
   target_link_libraries(alive-tv PRIVATE ${ALIVE_LIBS_LLVM} ${Z3_LIBRARIES} ${HIREDIS_LIBRARIES} ${llvm_libs})
   target_link_libraries(quick-fuzz PRIVATE ${ALIVE_LIBS_LLVM} ${Z3_LIBRARIES} ${HIREDIS_LIBRARIES} ${llvm_libs})
   target_link_libraries(alive-exec PRIVATE ${ALIVE_LIBS_LLVM} ${Z3_LIBRARIES} ${HIREDIS_LIBRARIES} ${llvm_libs})
+  target_link_libraries(alive-mutate PRIVATE ${ALIVE_LIBS_LLVM} ${Z3_LIBRARIES} ${HIREDIS_LIBRARIES} ${llvm_libs})
 endif()
 
 target_link_libraries(alive PRIVATE ${Z3_LIBRARIES} ${HIREDIS_LIBRARIES})
