@@ -57,6 +57,7 @@ public:
 
   smt::expr isLocal(bool simplify = true) const;
   smt::expr isConstGlobal() const;
+  smt::expr isWritableGlobal() const;
 
   smt::expr getBid() const;
   smt::expr getShortBid() const; // same as getBid but ignoring is_local bit
@@ -70,7 +71,7 @@ public:
   smt::expr blockSizeOffsetT() const; // to compare with offsets
 
   const smt::expr& operator()() const { return p; }
-  smt::expr release() { return std::move(p); }
+  smt::expr release() && { return std::move(p); }
   unsigned bits() const { return p.bits(); }
 
   Pointer operator+(unsigned) const;
