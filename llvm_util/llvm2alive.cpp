@@ -121,13 +121,13 @@ class llvm2alive_ : public llvm::InstVisitor<llvm2alive_, unique_ptr<Instr>> {
   template <typename T>
   uint64_t alignment(T &i, llvm::Type *ty) const {
     auto a = i.getAlign().value();
-    return a != 0 ? a : DL().getABITypeAlignment(ty);
+    return a != 0 ? a : DL().getABITypeAlign(ty).value();
   }
 
   template <typename T>
   uint64_t pref_alignment(T &i, llvm::Type *ty) const {
     auto a = i.getAlign().value();
-    return a != 0 ? a : DL().getPrefTypeAlignment(ty);
+    return a != 0 ? a : DL().getPrefTypeAlign(ty).value();
   }
 
   Value* convert_constexpr(llvm::ConstantExpr *cexpr) {
@@ -404,7 +404,7 @@ public:
       return error(i);
 
     RETURN_IDENTIFIER(make_unique<Memset>(*ptr, *val, *bytes,
-                                          max(1u, i.getDestAlignment())));
+                                          i.getDestAlign().valueOrOne().value()));
   }
 
   RetTy visitMemTransferInst(llvm::MemTransferInst &i) {
@@ -416,8 +416,8 @@ public:
       return error(i);
 
     RETURN_IDENTIFIER(make_unique<Memcpy>(*dst, *src, *bytes,
-                                          max(1u, i.getDestAlignment()),
-                                          max(1u, i.getSourceAlignment()),
+                                          i.getDestAlign().valueOrOne().value(),
+                                          i.getSourceAlign().valueOrOne().value(),
                                           isa<llvm::MemMoveInst>(&i)));
   }
 
@@ -543,8 +543,7 @@ public:
     auto gep = make_unique<GEP>(*ty, value_name(i), *ptr, i.isInBounds());
     auto gep_struct_ofs = [&i, this](llvm::StructType *sty, llvm::Value *ofs) {
       llvm::Value *vals[] = { llvm::ConstantInt::getFalse(i.getContext()), ofs };
-      return this->DL().getIndexedOffsetInType(sty,
-          llvm::makeArrayRef(vals, 2));
+      return this->DL().getIndexedOffsetInType(sty, { vals, 2 });
     };
 
     // reference: GEPOperator::accumulateConstantOffset()
@@ -578,7 +577,7 @@ public:
           }
 
           auto ofs_vector = llvm::ConstantVector::get(
-              llvm::makeArrayRef(offsets.data(), offsets.size()));
+	      { offsets.data(), offsets.size() });
           gep->addIdx(1, *get_operand(ofs_vector));
         } else {
           gep->addIdx(1, *make_intconst(
@@ -1194,61 +1193,52 @@ public:
     return {};
   }
 
-  bool handleMetadata(llvm::Instruction &llvm_i, Instr &i) {
+  bool handleMetadata(Function &Fn, llvm::Instruction &llvm_i, Instr *i) {
     llvm::SmallVector<pair<unsigned, llvm::MDNode*>, 8> MDs;
     llvm_i.getAllMetadataOtherThanDebugLoc(MDs);
 
     for (auto &[ID, Node] : MDs) {
       switch (ID) {
+      case LLVMContext::MD_align:
+      case LLVMContext::MD_nonnull:
       case LLVMContext::MD_range:
       {
-        Value *range = nullptr;
-        auto &boolTy = get_int_type(1);
-        for (unsigned op = 0, e = Node->getNumOperands(); op < e; ++op) {
-          auto *low =
-            llvm::mdconst::extract<llvm::ConstantInt>(Node->getOperand(op));
-          auto *high =
-            llvm::mdconst::extract<llvm::ConstantInt>(Node->getOperand(++op));
-
-          auto op_name = to_string(op / 2);
-          auto l = make_unique<ICmp>(boolTy,
-                                     "%range_l#" + op_name + value_name(llvm_i),
-                                     ICmp::SGE, i, *get_operand(low));
-
-          auto h = make_unique<ICmp>(boolTy,
-                                     "%range_h#" + op_name + value_name(llvm_i),
-                                     ICmp::SLT, i, *get_operand(high));
-
-          bool wrap = low->getValue().sgt(high->getValue());
-          auto r = make_unique<BinOp>(boolTy,
-                                      "%range#" + op_name + value_name(llvm_i),
-                                      *l.get(), *h.get(),
-                                      wrap ? BinOp::Or : BinOp::And);
-
-          auto r_ptr = r.get();
-          BB->addInstr(std::move(l));
-          BB->addInstr(std::move(h));
-          BB->addInstr(std::move(r));
-
-          if (range) {
-            auto range_or = make_unique<BinOp>(boolTy,
-                                               "$rangeOR$" + op_name +
-                                                 value_name(llvm_i),
-                                               *range, *r_ptr, BinOp::Or);
-            range = range_or.get();
-            BB->addInstr(std::move(range_or));
-          } else {
-            range = r_ptr;
-          }
+        vector<Value*> args;
+        for (auto &Op : Node->operands()) {
+          args.emplace_back(get_operand(
+            llvm::mdconst::extract<llvm::ConstantInt>(Op)));
         }
 
-        if (range)
-          BB->addInstr(make_unique<Assume>(*range, Assume::IfNonPoison));
+        AssumeVal::Kind op;
+        const char *str = nullptr;
+        switch (ID) {
+        case LLVMContext::MD_align:
+          op = AssumeVal::Align;
+          str = "_align";
+          break;
+        case LLVMContext::MD_nonnull:
+          op = AssumeVal::NonNull;
+          str = "_nonnull";
+        break;
+        case LLVMContext::MD_range:
+          op = AssumeVal::Range;
+          str = "_range";
+          break;
+        default:
+          UNREACHABLE();
+        }
+
+        auto assume
+          = make_unique<AssumeVal>(i->getType(), i->getName() + str, *i,
+                                   std::move(args), op);
+        replace_identifier(llvm_i, *assume);
+        i = assume.get();
+        BB->addInstr(std::move(assume));
         break;
       }
 
       case LLVMContext::MD_noundef:
-        BB->addInstr(make_unique<Assume>(i, Assume::WellDefined));
+        BB->addInstr(make_unique<Assume>(*i, Assume::WellDefined));
         break;
 
       // non-relevant for correctness
@@ -1309,10 +1299,10 @@ public:
         attrs.set(ParamAttrs::ByVal);
         auto ty = aset.getByValType();
         auto asz = DL().getTypeAllocSize(ty);
-        attrs.blockSize = max(attrs.blockSize, asz.getKnownMinSize());
+        attrs.blockSize = max(attrs.blockSize, asz.getKnownMinValue());
 
         attrs.set(ParamAttrs::Align);
-        attrs.align = max(attrs.align, DL().getABITypeAlignment(ty));
+        attrs.align = max(attrs.align, DL().getABITypeAlign(ty).value());
         break;
       }
 
@@ -1504,12 +1494,13 @@ public:
     MemoryAccess attrs;
     attrs.setNoAccess();
 
-    array<pair<llvm::MemoryEffects::Location, MemoryAccess::AccessType>, 4> tys
+    array<pair<llvm::MemoryEffects::Location, MemoryAccess::AccessType>, 5> tys
     {
       make_pair(llvm::MemoryEffects::ArgMem,          MemoryAccess::Args),
       make_pair(llvm::MemoryEffects::InaccessibleMem,
                 MemoryAccess::Inaccessible),
       make_pair(llvm::MemoryEffects::Other,           MemoryAccess::Other),
+      make_pair(llvm::MemoryEffects::Other,           MemoryAccess::Globals),
       make_pair(llvm::MemoryEffects::Other,           MemoryAccess::Errno),
     };
 
@@ -1647,7 +1638,7 @@ public:
           BB->addInstr(std::move(I));
 
           if (i.hasMetadataOtherThanDebugLoc() &&
-              !handleMetadata(i, *alive_i))
+              !handleMetadata(Fn, i, alive_i))
             return {};
         } else
           return {};

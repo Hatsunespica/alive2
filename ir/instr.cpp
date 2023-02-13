@@ -99,11 +99,6 @@ uint64_t getGlobalVarSize(const IR::Value *V) {
 
 namespace IR {
 
-bool Instr::propagatesPoison() const {
-  // be on the safe side
-  return false;
-}
-
 expr Instr::getTypeConstraints() const {
   UNREACHABLE();
   return {};
@@ -138,6 +133,10 @@ vector<Value*> BinOp::operands() const {
 
 bool BinOp::propagatesPoison() const {
   return true;
+}
+
+bool BinOp::hasSideEffects() const {
+  return isDivOrRem() || (flags & NoUndef);
 }
 
 void BinOp::rauw(const Value &what, Value &with) {
@@ -594,6 +593,10 @@ bool FpBinOp::propagatesPoison() const {
   return true;
 }
 
+bool FpBinOp::hasSideEffects() const {
+  return false;
+}
+
 void FpBinOp::rauw(const Value &what, Value &with) {
   RAUW(lhs);
   RAUW(rhs);
@@ -907,6 +910,10 @@ bool UnaryOp::propagatesPoison() const {
   return true;
 }
 
+bool UnaryOp::hasSideEffects() const {
+  return false;
+}
+
 void UnaryOp::rauw(const Value &what, Value &with) {
   RAUW(val);
 
@@ -1037,6 +1044,10 @@ bool FpUnaryOp::propagatesPoison() const {
   return true;
 }
 
+bool FpUnaryOp::hasSideEffects() const {
+  return false;
+}
+
 void FpUnaryOp::rauw(const Value &what, Value &with) {
   RAUW(val);
 }
@@ -1144,6 +1155,10 @@ bool UnaryReductionOp::propagatesPoison() const {
   return true;
 }
 
+bool UnaryReductionOp::hasSideEffects() const {
+  return false;
+}
+
 void UnaryReductionOp::rauw(const Value &what, Value &with) {
   RAUW(val);
 }
@@ -1212,6 +1227,10 @@ vector<Value*> TernaryOp::operands() const {
 
 bool TernaryOp::propagatesPoison() const {
   return true;
+}
+
+bool TernaryOp::hasSideEffects() const {
+  return false;
 }
 
 void TernaryOp::rauw(const Value &what, Value &with) {
@@ -1329,6 +1348,10 @@ bool FpTernaryOp::propagatesPoison() const {
   return true;
 }
 
+bool FpTernaryOp::hasSideEffects() const {
+  return false;
+}
+
 void FpTernaryOp::rauw(const Value &what, Value &with) {
   RAUW(a);
   RAUW(b);
@@ -1412,6 +1435,10 @@ bool TestOp::propagatesPoison() const {
   return true;
 }
 
+bool TestOp::hasSideEffects() const {
+  return false;
+}
+
 void TestOp::rauw(const Value &what, Value &with) {
   RAUW(lhs);
   RAUW(rhs);
@@ -1435,10 +1462,7 @@ StateValue TestOp::toSMT(State &s) const {
   case Is_FPClass:
     fn = [&](const expr &v, const Type &ty) -> expr {
       uint64_t n;
-      if (!b.value.isUInt(n) || !b.non_poison.isTrue()) {
-        s.addUB(expr(false));
-        return {};
-      }
+      ENSURE(b.value.isUInt(n) && b.non_poison.isTrue());
       auto *fpty = ty.getAsFloatType();
       auto a = fpty->getFloat(v);
       OrExpr result;
@@ -1502,6 +1526,10 @@ vector<Value*> ConversionOp::operands() const {
 
 bool ConversionOp::propagatesPoison() const {
   return true;
+}
+
+bool ConversionOp::hasSideEffects() const {
+  return false;
 }
 
 void ConversionOp::rauw(const Value &what, Value &with) {
@@ -1643,6 +1671,10 @@ vector<Value*> FpConversionOp::operands() const {
 
 bool FpConversionOp::propagatesPoison() const {
   return true;
+}
+
+bool FpConversionOp::hasSideEffects() const {
+  return flags & NoUndef;
 }
 
 void FpConversionOp::rauw(const Value &what, Value &with) {
@@ -1822,6 +1854,14 @@ vector<Value*> Select::operands() const {
   return { cond, a, b };
 }
 
+bool Select::propagatesPoison() const {
+  return false;
+}
+
+bool Select::hasSideEffects() const {
+  return false;
+}
+
 void Select::rauw(const Value &what, Value &with) {
   RAUW(cond);
   RAUW(a);
@@ -1884,6 +1924,14 @@ vector<Value*> ExtractValue::operands() const {
   return { val };
 }
 
+bool ExtractValue::propagatesPoison() const {
+  return false;
+}
+
+bool ExtractValue::hasSideEffects() const {
+  return false;
+}
+
 void ExtractValue::rauw(const Value &what, Value &with) {
   RAUW(val);
 }
@@ -1943,6 +1991,14 @@ void InsertValue::addIdx(unsigned idx) {
 
 vector<Value*> InsertValue::operands() const {
   return { val, elt };
+}
+
+bool InsertValue::propagatesPoison() const {
+  return false;
+}
+
+bool InsertValue::hasSideEffects() const {
+  return false;
 }
 
 void InsertValue::rauw(const Value &what, Value &with) {
@@ -2139,6 +2195,10 @@ vector<Value*> FnCall::operands() const {
   return output;
 }
 
+bool FnCall::propagatesPoison() const {
+  return false;
+}
+
 void FnCall::rauw(const Value &what, Value &with) {
   for (auto &arg : args) {
     RAUW(arg.first);
@@ -2194,17 +2254,19 @@ static void check_can_load(State &s, const expr &p0) {
     return;
 
   Pointer p(s.getMemory(), p0);
-  expr readable    = p.isLocal() || p.isConstGlobal();
+  expr readable = p.isLocal() ||
+                  p.isConstGlobal() ||
+                  attrs.mem.canRead(MemoryAccess::Other);
   expr nonreadable = false;
 
-  if (attrs.has(FnAttrs::NullPointerIsValid) &&
-      attrs.mem.canRead(MemoryAccess::Other))
-    readable |= p.isNull();
+  (attrs.mem.canRead(MemoryAccess::Globals) ? readable : nonreadable)
+    |= p.isWritableGlobal();
 
   (attrs.mem.canRead(MemoryAccess::Args) ? readable : nonreadable)
     |= ptr_only_args(s, p);
 
-  s.addUB(readable && !nonreadable);
+  s.addUB(std::move(readable));
+  s.addUB(!nonreadable);
 }
 
 static void check_can_store(State &s, const expr &p0) {
@@ -2216,13 +2278,17 @@ static void check_can_store(State &s, const expr &p0) {
     return;
 
   Pointer p(s.getMemory(), p0);
-  expr writable    = p.isLocal();
+  expr writable    = p.isLocal() || attrs.mem.canWrite(MemoryAccess::Other);
   expr nonwritable = false;
+
+  (attrs.mem.canWrite(MemoryAccess::Globals) ? writable : nonwritable)
+    |= p.isWritableGlobal();
 
   (attrs.mem.canWrite(MemoryAccess::Args) ? writable : nonwritable)
     |= ptr_only_args(s, p);
 
-  s.addUB(writable && !nonwritable);
+  s.addUB(std::move(writable));
+  s.addUB(!nonwritable);
 }
 
 static void unpack_inputs(State &s, Value &argv, Type &ty,
@@ -2445,6 +2511,10 @@ bool ICmp::propagatesPoison() const {
   return true;
 }
 
+bool ICmp::hasSideEffects() const {
+  return false;
+}
+
 bool ICmp::isPtrCmp() const {
   auto &elem_ty = a->getType();
   return elem_ty.isPtrType() ||
@@ -2569,6 +2639,14 @@ vector<Value*> FCmp::operands() const {
   return { a, b };
 }
 
+bool FCmp::propagatesPoison() const {
+  return true;
+}
+
+bool FCmp::hasSideEffects() const {
+  return false;
+}
+
 void FCmp::rauw(const Value &what, Value &with) {
   RAUW(a);
   RAUW(b);
@@ -2656,6 +2734,14 @@ vector<Value*> Freeze::operands() const {
   return { val };
 }
 
+bool Freeze::propagatesPoison() const {
+  return false;
+}
+
+bool Freeze::hasSideEffects() const {
+  return false;
+}
+
 void Freeze::rauw(const Value &what, Value &with) {
   RAUW(val);
 }
@@ -2740,6 +2826,14 @@ vector<Value*> Phi::operands() const {
   return v;
 }
 
+bool Phi::propagatesPoison() const {
+  return false;
+}
+
+bool Phi::hasSideEffects() const {
+  return false;
+}
+
 void Phi::rauw(const Value &what, Value &with) {
   for (auto &[val, bb] : values) {
     RAUW(val);
@@ -2804,6 +2898,14 @@ unique_ptr<Instr> Phi::dup(Function &f, const string &suffix) const {
   return phi;
 }
 
+
+bool JumpInstr::propagatesPoison() const {
+  return false;
+}
+
+bool JumpInstr::hasSideEffects() const {
+  return true;
+}
 
 const BasicBlock& JumpInstr::target_iterator::operator*() const {
   if (auto br = dynamic_cast<const Branch*>(instr))
@@ -2953,6 +3055,14 @@ vector<Value*> Return::operands() const {
   return { val };
 }
 
+bool Return::propagatesPoison() const {
+  return false;
+}
+
+bool Return::hasSideEffects() const {
+  return true;
+}
+
 void Return::rauw(const Value &what, Value &with) {
   RAUW(val);
 }
@@ -3042,15 +3152,13 @@ unique_ptr<Instr> Return::dup(Function &f, const string &suffix) const {
 
 Assume::Assume(Value &cond, Kind kind)
     : Instr(Type::voidTy, "assume"), args({&cond}), kind(kind) {
-  assert(kind == AndNonPoison || kind == IfNonPoison || kind == WellDefined ||
-         kind == NonNull);
+  assert(kind == AndNonPoison || kind == WellDefined || kind == NonNull);
 }
 
 Assume::Assume(vector<Value *> &&args0, Kind kind)
     : Instr(Type::voidTy, "assume"), args(std::move(args0)), kind(kind) {
   if (args.size() == 1)
-    assert(kind == AndNonPoison || kind == IfNonPoison || kind == WellDefined ||
-           kind == NonNull);
+    assert(kind == AndNonPoison || kind == WellDefined || kind == NonNull);
   else {
     assert(kind == Align && args.size() == 2);
   }
@@ -3058,6 +3166,14 @@ Assume::Assume(vector<Value *> &&args0, Kind kind)
 
 vector<Value*> Assume::operands() const {
   return args;
+}
+
+bool Assume::propagatesPoison() const {
+  return false;
+}
+
+bool Assume::hasSideEffects() const {
+  return true;
 }
 
 void Assume::rauw(const Value &what, Value &with) {
@@ -3069,7 +3185,6 @@ void Assume::print(ostream &os) const {
   const char *str = nullptr;
   switch (kind) {
   case AndNonPoison: str = "assume "; break;
-  case IfNonPoison:  str = "assume_non_poison "; break;
   case WellDefined:  str = "assume_welldefined "; break;
   case Align:        str = "assume_align "; break;
   case NonNull:      str = "assume_nonnull "; break;
@@ -3090,11 +3205,6 @@ StateValue Assume::toSMT(State &s) const {
   case AndNonPoison: {
     auto &v = s.getAndAddPoisonUB(*args[0]);
     s.addUB(v.value != 0);
-    break;
-  }
-  case IfNonPoison: {
-    auto &[v, np] = s[*args[0]];
-    s.addUB(np.implies(v != 0));
     break;
   }
   case WellDefined:
@@ -3128,7 +3238,6 @@ expr Assume::getTypeConstraints(const Function &f) const {
   case WellDefined:
     return true;
   case AndNonPoison:
-  case IfNonPoison:
     return args[0]->getType().enforceIntType();
   case Align:
     return args[0]->getType().enforcePtrType() &&
@@ -3143,6 +3252,122 @@ unique_ptr<Instr> Assume::dup(Function &f, const string &suffix) const {
   return make_unique<Assume>(vector<Value *>(args), kind);
 }
 
+
+AssumeVal::AssumeVal(Type &type, string &&name, Value &val,
+                     vector<Value *> &&args0, Kind kind)
+    : Instr(type, std::move(name)), val(&val), args(std::move(args0)),
+      kind(kind) {
+  switch (kind) {
+  case Align:
+    assert(args.size() == 1);
+    break;
+  case NonNull:
+    assert(args.empty());
+    break;
+  case Range:
+    assert((args.size() & 1) == 0);
+    break;
+  }
+}
+
+vector<Value*> AssumeVal::operands() const {
+  auto ret = args;
+  ret.emplace_back(val);
+  return ret;
+}
+
+bool AssumeVal::propagatesPoison() const {
+  return true;
+}
+
+bool AssumeVal::hasSideEffects() const {
+  return false;
+}
+
+void AssumeVal::rauw(const Value &what, Value &with) {
+  RAUW(val);
+  for (auto &arg: args)
+    RAUW(arg);
+}
+
+void AssumeVal::print(ostream &os) const {
+  const char *str = nullptr;
+  switch (kind) {
+  case Align:   str = "align "; break;
+  case NonNull: str = "nonnull "; break;
+  case Range:   str = "range "; break;
+  }
+
+  os << getName() << " = !" << str << *val;
+
+  for (auto &arg: args) {
+    os << ", " << *arg;
+  }
+}
+
+StateValue AssumeVal::toSMT(State &s) const {
+  auto &v = s[*val];
+
+  expr np;
+  switch (kind) {
+  case Align:
+    uint64_t n;
+    ENSURE(s[*args[0]].value.isUInt(n));
+    np = Pointer(s.getMemory(), expr(v.value)).isAligned(n);
+    break;
+
+  case NonNull:
+    np = !Pointer(s.getMemory(), expr(v.value)).isNull();
+    break;
+
+  case Range: { // val in [l1, h1) U ... U [ln, hn) (signed)
+    OrExpr inrange;
+    for (unsigned i = 0, e = args.size(); i != e; i += 2) {
+      auto &lb = s[*args[i]].value;
+      auto &hb = s[*args[i+1]].value;
+      auto l = v.value.sge(lb);
+      auto h = v.value.slt(hb);
+
+      if (lb.sgt(hb).isTrue()) { // wrapping interval
+        inrange.add(std::move(l));
+        inrange.add(std::move(h));
+      } else {
+        inrange.add(l && h);
+      }
+    }
+    np = std::move(inrange)();
+    break;
+  }
+  }
+  return { expr(v.value), v.non_poison && np };
+}
+
+expr AssumeVal::getTypeConstraints(const Function &f) const {
+  expr e = true;
+  switch (kind) {
+  case Align:
+    e = args[0]->getType().isIntType();
+    break;
+  case NonNull:
+    break;
+  case Range:
+    for (auto &arg : args) {
+      e &= arg->getType() == getType();
+    }
+    break;
+  }
+  return getType() == val->getType() && e;
+}
+
+unique_ptr<Instr> AssumeVal::dup(Function &f, const string &suffix) const {
+  return make_unique<AssumeVal>(getType(), getName() + suffix, *val,
+                                vector<Value*>(args), kind);
+}
+
+
+bool MemInstr::hasSideEffects() const {
+  return true;
+}
 
 MemInstr::ByteAccessInfo MemInstr::ByteAccessInfo::intOnly(unsigned bytesz) {
   ByteAccessInfo info;
@@ -3193,6 +3418,10 @@ vector<Value*> Alloc::operands() const {
   if (mul)
     return { size, mul };
   return { size };
+}
+
+bool Alloc::propagatesPoison() const {
+  return true;
 }
 
 void Alloc::rauw(const Value &what, Value &with) {
@@ -3256,6 +3485,10 @@ vector<Value*> StartLifetime::operands() const {
   return { ptr };
 }
 
+bool StartLifetime::propagatesPoison() const {
+  return false;
+}
+
 void StartLifetime::rauw(const Value &what, Value &with) {
   RAUW(ptr);
 }
@@ -3286,6 +3519,10 @@ DEFINE_AS_EMPTYACCESS(EndLifetime);
 
 vector<Value*> EndLifetime::operands() const {
   return { ptr };
+}
+
+bool EndLifetime::propagatesPoison() const {
+  return false;
 }
 
 void EndLifetime::rauw(const Value &what, Value &with) {
@@ -3357,6 +3594,14 @@ vector<Value*> GEP::operands() const {
   return v;
 }
 
+bool GEP::propagatesPoison() const {
+  return true;
+}
+
+bool GEP::hasSideEffects() const {
+  return false;
+}
+
 void GEP::rauw(const Value &what, Value &with) {
   RAUW(ptr);
   for (auto &[sz, idx] : idxs) {
@@ -3409,7 +3654,7 @@ StateValue GEP::toSMT(State &s) const {
       if (inbounds)
         non_poison.add(ptr.inbounds());
     }
-    return { ptr.release(), non_poison() };
+    return { std::move(ptr).release(), non_poison() };
   };
 
   if (auto aty = getType().getAsAggregateType()) {
@@ -3472,6 +3717,10 @@ vector<Value*> Load::operands() const {
   return { ptr };
 }
 
+bool Load::propagatesPoison() const {
+  return true;
+}
+
 void Load::rauw(const Value &what, Value &with) {
   RAUW(ptr);
 }
@@ -3512,6 +3761,10 @@ MemInstr::ByteAccessInfo Store::getByteAccessInfo() const {
 
 vector<Value*> Store::operands() const {
   return { val, ptr };
+}
+
+bool Store::propagatesPoison() const {
+  return false;
 }
 
 void Store::rauw(const Value &what, Value &with) {
@@ -3564,6 +3817,10 @@ MemInstr::ByteAccessInfo Memset::getByteAccessInfo() const {
 
 vector<Value*> Memset::operands() const {
   return { ptr, val, bytes };
+}
+
+bool Memset::propagatesPoison() const {
+  return false;
 }
 
 void Memset::rauw(const Value &what, Value &with) {
@@ -3633,6 +3890,10 @@ vector<Value*> MemsetPattern::operands() const {
   return { ptr, pattern, bytes };
 }
 
+bool MemsetPattern::propagatesPoison() const {
+  return false;
+}
+
 void MemsetPattern::rauw(const Value &what, Value &with) {
   RAUW(ptr);
   RAUW(pattern);
@@ -3677,6 +3938,10 @@ MemInstr::ByteAccessInfo FillPoison::getByteAccessInfo() const {
 
 vector<Value*> FillPoison::operands() const {
   return { ptr };
+}
+
+bool FillPoison::propagatesPoison() const {
+  return true;
 }
 
 void FillPoison::rauw(const Value &what, Value &with) {
@@ -3725,6 +3990,10 @@ MemInstr::ByteAccessInfo Memcpy::getByteAccessInfo() const {
 
 vector<Value*> Memcpy::operands() const {
   return { dst, src, bytes };
+}
+
+bool Memcpy::propagatesPoison() const {
+  return false;
 }
 
 void Memcpy::rauw(const Value &what, Value &with) {
@@ -3800,6 +4069,10 @@ MemInstr::ByteAccessInfo Memcmp::getByteAccessInfo() const {
 
 vector<Value*> Memcmp::operands() const {
   return { ptr1, ptr2, num };
+}
+
+bool Memcmp::propagatesPoison() const {
+  return false;
 }
 
 void Memcmp::rauw(const Value &what, Value &with) {
@@ -3911,6 +4184,10 @@ vector<Value*> Strlen::operands() const {
   return { ptr };
 }
 
+bool Strlen::propagatesPoison() const {
+  return true;
+}
+
 void Strlen::rauw(const Value &what, Value &with) {
   RAUW(ptr);
 }
@@ -3953,6 +4230,14 @@ unique_ptr<Instr> Strlen::dup(Function &f, const string &suffix) const {
 
 vector<Value*> VaStart::operands() const {
   return { ptr };
+}
+
+bool VaStart::propagatesPoison() const {
+  return true;
+}
+
+bool VaStart::hasSideEffects() const {
+  return true;
 }
 
 void VaStart::rauw(const Value &what, Value &with) {
@@ -4006,6 +4291,14 @@ unique_ptr<Instr> VaStart::dup(Function &f, const string &suffix) const {
 
 vector<Value*> VaEnd::operands() const {
   return { ptr };
+}
+
+bool VaEnd::propagatesPoison() const {
+  return true;
+}
+
+bool VaEnd::hasSideEffects() const {
+  return true;
 }
 
 void VaEnd::rauw(const Value &what, Value &with) {
@@ -4069,6 +4362,14 @@ vector<Value*> VaCopy::operands() const {
   return { dst, src };
 }
 
+bool VaCopy::propagatesPoison() const {
+  return true;
+}
+
+bool VaCopy::hasSideEffects() const {
+  return true;
+}
+
 void VaCopy::rauw(const Value &what, Value &with) {
   RAUW(dst);
   RAUW(src);
@@ -4124,6 +4425,14 @@ unique_ptr<Instr> VaCopy::dup(Function &f, const string &suffix) const {
 
 vector<Value*> VaArg::operands() const {
   return { ptr };
+}
+
+bool VaArg::propagatesPoison() const {
+  return true;
+}
+
+bool VaArg::hasSideEffects() const {
+  return true;
 }
 
 void VaArg::rauw(const Value &what, Value &with) {
@@ -4185,6 +4494,15 @@ vector<Value*> ExtractElement::operands() const {
   return { v, idx };
 }
 
+bool ExtractElement::propagatesPoison() const {
+  // the output depends on the idx, so it may not propagate to all lanes
+  return false;
+}
+
+bool ExtractElement::hasSideEffects() const {
+  return false;
+}
+
 void ExtractElement::rauw(const Value &what, Value &with) {
   RAUW(v);
   RAUW(idx);
@@ -4216,6 +4534,14 @@ unique_ptr<Instr> ExtractElement::dup(Function &f, const string &suffix) const {
 
 vector<Value*> InsertElement::operands() const {
   return { v, e, idx };
+}
+
+bool InsertElement::propagatesPoison() const {
+  return false;
+}
+
+bool InsertElement::hasSideEffects() const {
+  return false;
 }
 
 void InsertElement::rauw(const Value &what, Value &with) {
@@ -4253,6 +4579,15 @@ unique_ptr<Instr> InsertElement::dup(Function &f, const string &suffix) const {
 
 vector<Value*> ShuffleVector::operands() const {
   return { v1, v2 };
+}
+
+bool ShuffleVector::propagatesPoison() const {
+  // the output depends on the mask, so it may not propagate to all lanes
+  return false;
+}
+
+bool ShuffleVector::hasSideEffects() const {
+  return false;
 }
 
 void ShuffleVector::rauw(const Value &what, Value &with) {
@@ -4300,17 +4635,6 @@ unique_ptr<Instr> ShuffleVector::dup(Function &f, const string &suffix) const {
 const ConversionOp* isCast(ConversionOp::Op op, const Value &v) {
   auto c = dynamic_cast<const ConversionOp*>(&v);
   return (c && c->getOp() == op) ? c : nullptr;
-}
-
-bool hasNoSideEffects(const Instr &i) {
-  return isNoOp(i) ||
-         dynamic_cast<const ConversionOp*>(&i) ||
-         dynamic_cast<const ExtractValue*>(&i) ||
-         dynamic_cast<const Freeze*>(&i) ||
-         dynamic_cast<const GEP*>(&i) ||
-         dynamic_cast<const ICmp*>(&i) ||
-         dynamic_cast<const InsertValue*>(&i) ||
-         dynamic_cast<const ShuffleVector*>(&i);
 }
 
 Value* isNoOp(const Value &v) {

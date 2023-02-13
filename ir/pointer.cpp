@@ -170,8 +170,18 @@ expr Pointer::isConstGlobal() const {
   auto generic = bid.uge(has_null_block) &&
                  expr(num_consts_src > 0) &&
                  bid.ule(num_consts_src + has_null_block - 1);
-  auto tgt = num_nonlocals_src == 0 ? expr(true) : bid.ugt(num_nonlocals_src-1);
+  auto tgt
+    = (num_nonlocals_src == 0 ? expr(true) : bid.ugt(num_nonlocals_src-1)) &&
+      expr(num_nonlocals != num_nonlocals_src);
   return !isLocal() && (generic || tgt);
+}
+
+expr Pointer::isWritableGlobal() const {
+  auto bid = getShortBid();
+  return !isLocal() &&
+         bid.uge(has_null_block + num_consts_src) &&
+         expr(num_globals_src > 0) &&
+         bid.ule(has_null_block + num_globals_src - 1);
 }
 
 expr Pointer::getBid() const {
@@ -402,7 +412,7 @@ AndExpr Pointer::isDereferenceable(const expr &bytes0, uint64_t align,
 
     // record pointer if not definitely unfeasible
     if (!ub.isFalse() && !aligned.isFalse() && !ptr.blockSize().isZero())
-      all_ptrs.add(ptr.release(), domain);
+      all_ptrs.add(std::move(ptr).release(), domain);
 
     UB.add(std::move(ub), domain);
     is_aligned.add(std::move(aligned), domain);

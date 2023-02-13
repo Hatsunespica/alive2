@@ -1274,9 +1274,9 @@ expr expr::funo(const expr &rhs) const {
 static expr get_bool(const expr &e) {
   expr cond, then, els;
   if (e.isIf(cond, then, els)) {
-    if ((then == 1).isTrue() && (els == 0).isTrue())
+    if (then.isOne() && els.isZero())
       return cond;
-    if ((then == 0).isTrue() && (els == 1).isTrue())
+    if (then.isZero() && els.isOne())
       return !cond;
   }
   return {};
@@ -1446,12 +1446,14 @@ expr expr::cmp_eq(const expr &rhs, bool simplify) const {
           // r .. l .. r+sz
           if (l_idx >= r_idx && l_idx < (r_idx + r_bits)) {
             unsigned overlap = min(r_bits - (l_idx - r_idx), l_bits);
+            unsigned r_off = r_idx + r_bits - (l_idx + overlap);
             eqs.add(lhs.extract(l_bits-1, l_bits - overlap) ==
-                    rhs.extract(overlap-1, 0));
+                    rhs.extract(r_off + overlap - 1, r_off));
           }
           else if (r_idx >= l_idx && r_idx < (l_idx + l_bits)) {
             unsigned overlap = min(l_bits - (r_idx - l_idx), r_bits);
-            eqs.add(lhs.extract(overlap-1, 0) ==
+            unsigned l_off = l_idx + l_bits - (r_idx + overlap);
+            eqs.add(lhs.extract(l_off + overlap - 1, l_off) ==
                     rhs.extract(r_bits-1, r_bits - overlap));
           }
         }
@@ -2228,7 +2230,7 @@ string expr::numeral_string() const {
 string expr::fn_name() const {
   if (isApp())
     return Z3_get_symbol_string(ctx(), Z3_get_decl_name(ctx(), decl()));
-  return "";
+  return {};
 }
 
 unsigned expr::getFnNumArgs() const {
