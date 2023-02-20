@@ -25,6 +25,7 @@
 #include "smt/smt.h"
 #include "tools/mutator-utils/mutator.h"
 #include "tools/transform.h"
+#include "llvm_util/compare.h"
 #include "util/version.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Triple.h"
@@ -153,86 +154,6 @@ filesystem::path inputPath, outputPath;
 
 optional<smt::smt_initializer> smt_init;
 
-struct Results {
-  Transform t;
-  string error;
-  Errors errs;
-  enum {
-    ERROR,
-    TYPE_CHECKER_FAILED,
-    SYNTACTIC_EQ,
-    CORRECT,
-    UNSOUND,
-    FAILED_TO_PROVE
-  } status;
-
-  static Results Error(string &&err) {
-    Results r;
-    r.status = ERROR;
-    r.error = move(err);
-    return r;
-  }
-};
-
-Results verify(llvm::Function &F1, llvm::Function &F2,
-               llvm::TargetLibraryInfoWrapperPass &TLI,
-               bool print_transform = false, bool always_verify = false) {
-  auto fn1 = llvm2alive(F1, TLI.getTLI(F1), true);
-  if (!fn1)
-    return Results::Error("Could not translate '" + F1.getName().str() +
-                          "' to Alive IR\n");
-
-  auto fn2 = llvm2alive(F2, TLI.getTLI(F2), false, fn1->getGlobalVarNames());
-  if (!fn2)
-    return Results::Error("Could not translate '" + F2.getName().str() +
-                          "' to Alive IR\n");
-
-  Results r;
-  r.t.src = move(*fn1);
-  r.t.tgt = move(*fn2);
-
-  if (!always_verify) {
-    stringstream ss1, ss2;
-    r.t.src.print(ss1);
-    r.t.tgt.print(ss2);
-    if (ss1.str() == ss2.str()) {
-      // if (print_transform)
-      //   r.t.print(*out, {});
-      r.status = Results::SYNTACTIC_EQ;
-      return r;
-    }
-  }
-
-  smt_init->reset();
-  r.t.preprocess();
-  TransformVerify verifier(r.t, false);
-
-  // if (print_transform)
-  // r.t.print(*out, {});
-
-  {
-    auto types = verifier.getTypings();
-    if (!types) {
-      r.status = Results::TYPE_CHECKER_FAILED;
-      return r;
-    }
-    assert(types.hasSingleTyping());
-  }
-
-  r.errs = verifier.verify();
-  if (r.errs) {
-    r.status = r.errs.isUnsound() ? Results::UNSOUND : Results::FAILED_TO_PROVE;
-  } else {
-    r.status = Results::CORRECT;
-  }
-  return r;
-}
-
-unsigned num_correct = 0;
-unsigned num_unsound = 0;
-unsigned num_failed = 0;
-unsigned num_errors = 0;
-
 unsigned long long tot_num_correct = 0;
 unsigned long long tot_num_unsound = 0;
 unsigned long long tot_num_failed = 0;
@@ -241,107 +162,6 @@ unsigned long long tot_num_errors = 0;
 std::stringstream logs;
 unordered_set<std::string> logsFilter;
 
-bool writeLog(bool repeatCheck, llvm::Function &F1, Results &r) {
-  std::string str = logs.str();
-  if (repeatCheck) {
-    if (logsFilter.find(str) == logsFilter.end()) {
-      logsFilter.insert(str);
-    } else {
-      return false;
-    }
-    if (r.status == Results::ERROR) {
-      if (logsFilter.find(r.error) == logsFilter.end()) {
-        logsFilter.insert(r.error);
-      } else {
-        return false;
-      }
-    } else if (r.status == Results::TYPE_CHECKER_FAILED) {
-      if (logsFilter.find("ERROR: program doesn't type check!") ==
-          logsFilter.end()) {
-        logsFilter.insert("ERROR: program doesn't type check!");
-      } else {
-        return false;
-      }
-    } else if (r.status == Results::FAILED_TO_PROVE) {
-      std::stringstream tmp;
-      tmp << r.errs;
-      std::string tmpS = tmp.str();
-      if (logsFilter.find(tmpS) == logsFilter.end()) {
-        logsFilter.insert(tmpS);
-      } else {
-        return false;
-      }
-    }
-  }
-  out_file << str << "\n";
-  out_file << "Current seed:" << Random::getSeed() << "\n";
-  out_file << "Source file:" << F1.getParent()->getSourceFileName() << "\n";
-  r.t.print(out_file, {});
-  if (r.status == Results::ERROR) {
-    out_file << "ERROR: " << r.error;
-    return true;
-  } else if (r.status == Results::TYPE_CHECKER_FAILED) {
-    out_file << "Transformation doesn't verify!\n"
-                "ERROR: program doesn't type check!\n\n";
-  } else if (r.status == Results::UNSOUND) {
-    out_file << "Transformation doesn't verify!\n\n";
-    if (!opt_quiet)
-      out_file << r.errs << endl;
-  } else if (r.status == Results::FAILED_TO_PROVE) {
-    out_file << r.errs << endl;
-  }
-  return true;
-}
-
-bool compareFunctions(llvm::Function &F1, llvm::Function &F2,
-                      llvm::TargetLibraryInfoWrapperPass &TLI) {
-  auto r = verify(F1, F2, TLI, !opt_quiet, opt_always_verify);
-  bool shouldLog = false;
-  if (verbose) {
-    writeLog(false, F1, r);
-    shouldLog = true;
-  } else {
-    switch (r.status) {
-    case Results::ERROR:
-    case Results::UNSOUND:
-    case Results::TYPE_CHECKER_FAILED:
-    case Results::FAILED_TO_PROVE:
-      shouldLog = writeLog(r.status != Results::UNSOUND, F1, r);
-    default:
-      break;
-    }
-  }
-  if (r.status == Results::ERROR) {
-    ++num_errors;
-    return shouldLog;
-  }
-  switch (r.status) {
-  case Results::ERROR:
-    UNREACHABLE();
-    break;
-
-  case Results::SYNTACTIC_EQ:
-    ++num_correct;
-    break;
-
-  case Results::CORRECT:
-    ++num_correct;
-    break;
-
-  case Results::TYPE_CHECKER_FAILED:
-    ++num_errors;
-    break;
-
-  case Results::UNSOUND:
-    ++num_unsound;
-    break;
-
-  case Results::FAILED_TO_PROVE:
-    ++num_failed;
-    break;
-  }
-  return shouldLog;
-}
 } // namespace
 
 cl::list<size_t>
@@ -422,7 +242,7 @@ version )EOF";
     timeMode();
   }
   programEnd();
-  return num_errors > 0;
+  return tot_num_errors > 0;
 }
 
 bool inputVerify() {
@@ -481,10 +301,9 @@ bool inputVerify() {
           llvm::TargetLibraryInfoWrapperPass TLI(
               llvm::Triple(M1.get()->getTargetTriple()));
           smt_init.emplace();
-          auto r = verify(*fit, *f2, TLI, !opt_quiet, opt_always_verify);
+          llvm_util::VerifierWithLogs verifier(TLI, *smt_init, *out,out_file,logs,logsFilter,Random::getSeed());
           smt_init.reset();
-          if (r.status == Results::CORRECT ||
-              r.status == Results::SYNTACTIC_EQ) {
+          if (verifier.num_correct==1) {
             ++validFuncNum;
             valid = true;
             if (fit->getLinkage() ==
@@ -506,7 +325,6 @@ bool inputVerify() {
     tot_num_failed = 0;
     tot_num_errors = 0;
 
-    num_correct = num_unsound = num_failed = num_errors = 0;
   } else {
     cerr << "Cannot open input file " + testfile + "!\n";
   }
@@ -644,6 +462,7 @@ void runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator) {
 
   llvm::Triple targetTriple(M1.get()->getTargetTriple());
   llvm::TargetLibraryInfoWrapperPass TLI(targetTriple);
+  llvm_util::VerifierWithLogs verifier(TLI, *smt_init, *out,out_file,logs,logsFilter,Random::getSeed());
 
   if (testMode) {
     llvm::Function *pf1 = M1->getFunction(optFunc);
@@ -660,17 +479,17 @@ void runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator) {
       llvm_util::optimize_module(M2.get(), optPass);
       llvm::Function *pf2 = M2->getFunction(pf1->getName());
       assert(pf2 != nullptr && "pf2 clone failed");
-      if (compareFunctions(*pf1, *pf2, TLI)) {
+      if (verifier.compareFunctions(*pf1,*pf2)) {
         shouldLog = true;
         if (opt_error_fatal)
           goto end;
       }
     }
   }
-  if (num_unsound > 0) {
+  if (verifier.num_unsound > 0) {
     ++logIndex;
     std::cout << "Unsound found! at " << ith << "th copies\n";
-  } else if (num_errors) {
+  } else if (verifier.num_errors) {
     ++logIndex;
     std::cout << "Alive error found! at" << ith << "th copies\n";
   }
@@ -678,27 +497,26 @@ void runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator) {
   if (verbose) {
     *out << "Summary:\n"
             "  "
-         << num_correct
+         << verifier.num_correct
          << " correct transformations\n"
             "  "
-         << num_unsound
+         << verifier.num_unsound
          << " incorrect transformations\n"
             "  "
-         << num_failed
+         << verifier.num_failed
          << " failed-to-prove transformations\n"
             "  "
-         << num_errors << " Alive2 errors\n";
+         << verifier.num_errors << " Alive2 errors\n";
   }
 end:
   if (opt_smt_stats)
     smt::solver_print_stats(*out);
   smt_init.reset();
-  tot_num_correct += num_correct;
-  tot_num_unsound += num_unsound;
-  tot_num_failed += num_failed;
-  tot_num_errors += num_errors;
+  tot_num_correct += verifier.num_correct;
+  tot_num_unsound += verifier.num_unsound;
+  tot_num_failed += verifier.num_failed;
+  tot_num_errors += verifier.num_errors;
 
-  num_correct = num_unsound = num_failed = num_errors = 0;
   if (testMode || (!verbose && !shouldLog)) {
     deleteLog(ith);
   }
