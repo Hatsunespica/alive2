@@ -93,6 +93,59 @@ Results verify(llvm::Function &F1, llvm::Function &F2,
   return r;
 }
 
+bool writeLog(bool repeatCheck, llvm::Function &F1, Results &r,
+  std::string logStr,std::unordered_set<std::string>& logsFilter,std::ofstream &out_file,
+  unsigned seed, bool quiet) {
+  if (repeatCheck) {
+    if (logsFilter.find(logStr) == logsFilter.end()) {
+      logsFilter.insert(logStr);
+    } else {
+      return false;
+    }
+    if (r.status == Results::ERROR) {
+      if (logsFilter.find(r.error) == logsFilter.end()) {
+        logsFilter.insert(r.error);
+      } else {
+        return false;
+      }
+    } else if (r.status == Results::TYPE_CHECKER_FAILED) {
+      if (logsFilter.find("ERROR: program doesn't type check!") ==
+          logsFilter.end()) {
+        logsFilter.insert("ERROR: program doesn't type check!");
+      } else {
+        return false;
+      }
+    } else if (r.status == Results::FAILED_TO_PROVE) {
+      std::stringstream tmp;
+      tmp << r.errs;
+      std::string tmpS = tmp.str();
+      if (logsFilter.find(tmpS) == logsFilter.end()) {
+        logsFilter.insert(tmpS);
+      } else {
+        return false;
+      }
+    }
+  }
+  out_file << logStr << "\n";
+  out_file << "Current seed:" << seed << "\n";
+  out_file << "Source file:" << F1.getParent()->getSourceFileName() << "\n";
+  r.t.print(out_file, {});
+  if (r.status == Results::ERROR) {
+    out_file << "ERROR: " << r.error;
+    return true;
+  } else if (r.status == Results::TYPE_CHECKER_FAILED) {
+    out_file << "Transformation doesn't verify!\n"
+                "ERROR: program doesn't type check!\n\n";
+  } else if (r.status == Results::UNSOUND) {
+    out_file << "Transformation doesn't verify!\n\n";
+    if (!quiet)
+      out_file << r.errs << endl;
+  } else if (r.status == Results::FAILED_TO_PROVE) {
+    out_file << r.errs << endl;
+  }
+  return true;
+}
+
 } // namespace
 
 bool Verifier::compareFunctions(llvm::Function &F1, llvm::Function &F2) {
@@ -169,4 +222,26 @@ bool Verifier::compareFunctions(llvm::Function &F1, llvm::Function &F2) {
     }
   }
   return true;
+}
+
+
+bool VerifierWithLogs::compareFunctions(llvm::Function &F1, llvm::Function &F2) {
+  bool shouldLog=false;
+  auto r = verify(F1, F2, TLI, smt_init, out, !quiet, always_verify);
+    if (verbose) {
+    writeLog(false, F1, r, logs.str(),logsFilter,out_file,randomSeed,quiet);
+    shouldLog = true;
+  } else {
+    switch (r.status) {
+    case Results::ERROR:
+    case Results::UNSOUND:
+    case Results::TYPE_CHECKER_FAILED:
+    case Results::FAILED_TO_PROVE:
+      shouldLog = writeLog(r.status != Results::UNSOUND, F1, r,logs.str(),logsFilter,out_file,randomSeed,quiet);
+    default:
+      break;
+    }
+  }
+  Verifier::compareFunctions(F1,F2);
+  return shouldLog;
 }
