@@ -302,7 +302,8 @@ bool inputVerify() {
               llvm::Triple(M1.get()->getTargetTriple()));
           smt_init.emplace();
           llvm_util::VerifierWithLogs verifier(TLI, *smt_init, *out,out_file,logs,logsFilter,Random::getSeed());
-          smt_init.reset();
+          verifier.compareFunctions(*fit,*f2);
+          smt_init.reset();          
           if (verifier.num_correct==1) {
             ++validFuncNum;
             valid = true;
@@ -462,7 +463,13 @@ void runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator) {
 
   llvm::Triple targetTriple(M1.get()->getTargetTriple());
   llvm::TargetLibraryInfoWrapperPass TLI(targetTriple);
+  smt_init.emplace();
   llvm_util::VerifierWithLogs verifier(TLI, *smt_init, *out,out_file,logs,logsFilter,Random::getSeed());
+  verifier.quiet = opt_quiet;
+  verifier.always_verify = opt_always_verify;
+  verifier.print_dot = opt_print_dot;
+  verifier.bidirectional = opt_bidirectional;
+  verifier.verbose = verbose;
 
   if (testMode) {
     llvm::Function *pf1 = M1->getFunction(optFunc);
@@ -470,8 +477,6 @@ void runOnce(int ith, llvm::LLVMContext &context, Mutator &mutator) {
     llvm_util::optimize_module(M2.get(), optPass);
     goto end;
   }
-
-  smt_init.emplace();
 
   if (llvm::Function *pf1 = M1->getFunction(optFunc); pf1 != nullptr) {
     if (!pf1->isDeclaration()) {
