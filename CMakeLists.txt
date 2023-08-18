@@ -214,6 +214,10 @@ if (BUILD_LLVM_UTILS OR BUILD_TV)
     "tools/alive-mutate.cpp"
   )
 
+  add_llvm_executable(alive-iden
+          "tools/alive-iden.cpp"
+  )
+
 else()
   set(LLVM_UTIL_SRCS "")
 endif()
@@ -262,6 +266,7 @@ if (BUILD_LLVM_UTILS OR BUILD_TV)
   target_link_libraries(quick-fuzz PRIVATE ${ALIVE_LIBS_LLVM} ${Z3_LIBRARIES} ${HIREDIS_LIBRARIES} ${llvm_libs})
   target_link_libraries(alive-exec PRIVATE ${ALIVE_LIBS_LLVM} ${Z3_LIBRARIES} ${HIREDIS_LIBRARIES} ${llvm_libs})
   target_link_libraries(alive-mutate PRIVATE ${ALIVE_LIBS_LLVM} ${Z3_LIBRARIES} ${HIREDIS_LIBRARIES} ${llvm_libs})
+  target_link_libraries(alive-iden PRIVATE ${ALIVE_LIBS_LLVM} ${Z3_LIBRARIES} ${HIREDIS_LIBRARIES} ${llvm_libs})
   install(TARGETS alive-tv quick-fuzz alive-exec)
 endif()
 

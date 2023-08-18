@@ -46,10 +46,10 @@ namespace {
 llvm::cl::OptionCategory mutatorArgs("Mutator options");
 
 llvm::cl::opt<string> inputFile(llvm::cl::Positional,
-                               llvm::cl::desc("<inputFile>"),
-                               llvm::cl::Required,
-                               llvm::cl::value_desc("filename"),
-                               llvm::cl::cat(mutatorArgs));
+                                llvm::cl::desc("<inputFile>"),
+                                llvm::cl::Required,
+                                llvm::cl::value_desc("filename"),
+                                llvm::cl::cat(mutatorArgs));
 
 llvm::cl::opt<string> outputFolder(llvm::cl::Positional,
                                    llvm::cl::desc("<outputFileFolder>"),
@@ -64,18 +64,7 @@ llvm::cl::opt<long long> randomSeed(
     llvm::cl::desc("specify the seed of the random number generator"),
     llvm::cl::init(-1));
 
-llvm::cl::opt<int>
-    numCopy(LLVM_ARGS_PREFIX "n",
-            llvm::cl::value_desc("number of copies of test files"),
-            llvm::cl::desc("specify number of copies of test files"),
-            llvm::cl::cat(mutatorArgs), llvm::cl::init(-1));
-
-llvm::cl::opt<int>
-    timeElapsed(LLVM_ARGS_PREFIX "t",
-                llvm::cl::value_desc("seconds of the mutator should run"),
-                llvm::cl::cat(mutatorArgs),
-                llvm::cl::desc("specify seconds of the mutator should run"),
-                llvm::cl::init(-1));
+const int numCopy=1;
 
 llvm::cl::opt<bool> removeUndef(
     LLVM_ARGS_PREFIX "removeUndef",
@@ -121,19 +110,19 @@ llvm::cl::opt<int> copyFunctions(
 llvm::cl::list<size_t>
     disableSEXT(LLVM_ARGS_PREFIX "disable-sigext",
                 llvm::cl::desc("option list -- This option would disable adding or "
-                         "removing sigext on integer type you specified"),
+                               "removing sigext on integer type you specified"),
                 llvm::cl::CommaSeparated, llvm::cl::cat(mutatorArgs));
 
 llvm::cl::list<size_t>
     disableZEXT(LLVM_ARGS_PREFIX "disable-zeroext",
                 llvm::cl::desc("option list -- This option would disable adding or "
-                         "removing sigext on integer type you specified"),
+                               "removing sigext on integer type you specified"),
                 llvm::cl::CommaSeparated, llvm::cl::cat(mutatorArgs));
 
 llvm::cl::list<size_t>
     disableEXT(LLVM_ARGS_PREFIX "disable-ext",
                llvm::cl::desc("option list -- This option would disable all ext "
-                        "instructions on integer type you specified"),
+                              "instructions on integer type you specified"),
                llvm::cl::CommaSeparated, llvm::cl::cat(mutatorArgs));
 
 
@@ -172,9 +161,7 @@ bool isValidOutputPath();
 
 // These function are used for actually running mutations. Both copy mode and time
 // mode would call runOnce a couple of times and exit.
-void copyMode(std::shared_ptr<llvm::Module>& pm),
-    timeMode(std::shared_ptr<llvm::Module>& pm),
-    runOnce(int ith, Mutator &mutator);
+void copyMode(std::shared_ptr<llvm::Module>& pm);
 
 // We need to verify the input to avoid certain scenarios.
 // 1. For those already non-sound functions, we need to skip them.
@@ -224,28 +211,12 @@ see alive-tv --version for LLVM version info,
     Random::setSeed((unsigned)randomSeed);
   }
 
-  if (numCopy < 0 && timeElapsed < 0) {
-    cerr << "Please specify either number of copies or running time!\n";
-    return -1;
-  } else if (!isValidOutputPath()) {
+  if (!isValidOutputPath()) {
     cerr << "Output folder does not exist!\n";
     return -1;
   }
 
-  if(verifyInput(M1)){
-    cerr << "All functions cannot pass input check!\n";
-    return -1;
-  }
-
-  if(invalidFunctions.size() > 0){
-    cerr << "Some functions can't pass input check, those would be skipped\n";
-  }
-
-  if (numCopy > 0) {
-    copyMode(M1);
-  } else if (timeElapsed > 0) {
-    timeMode(M1);
-  }
+  copyMode(M1);
   return 0;
 }
 
@@ -280,7 +251,7 @@ bool verifyInput(std::shared_ptr<llvm::Module>& M1){
   for_each(M1->begin(),M1->end(),[&unnamedFunction](llvm::Function& f){
     if(f.getName().empty()){
       f.setName(std::string("resetUnnamedFunction") +
-                   std::to_string(unnamedFunction++));
+                std::to_string(unnamedFunction++));
     }
   });
 
@@ -339,9 +310,10 @@ bool verifyInput(std::shared_ptr<llvm::Module>& M1){
 }
 
 void copyMode(std::shared_ptr<llvm::Module>& pm){
-    if (copyFunctions != 0) {
+  if (copyFunctions != 0) {
     mutator_util::propagateFunctionsInModule(pm.get(), copyFunctions);
   }
+
   std::unique_ptr<Mutator> mutator = std::make_unique<ModuleMutator>(
       pm, invalidFunctions, verbose, onEveryFunction);
   if (bool init = mutator->init(); init) {
@@ -350,82 +322,15 @@ void copyMode(std::shared_ptr<llvm::Module>& pm){
       if (verbose) {
         std::cout << "Running " << i << "th copies." << std::endl;
       }
-      runOnce(i, *mutator);
+      std::error_code ec;
+      llvm::raw_fd_ostream fout(getOutputSrcFilename(i), ec);
+      fout << *pm;
+      fout.close();
 
 
     }
   } else {
     cerr << "Cannot find any locations to mutate, " + inputFile + " skipped!\n";
     return;
-  }
-}
-
-void timeMode(std::shared_ptr<llvm::Module>& pm){
-  if (copyFunctions != 0) {
-    mutator_util::propagateFunctionsInModule(pm.get(), copyFunctions);
-  }
-  std::unique_ptr<Mutator> mutator = std::make_unique<ModuleMutator>(
-      pm, invalidFunctions, verbose, onEveryFunction);
-  bool init = mutator->init();
-  if (!init) {
-    cerr << "Cannot find any location to mutate, " + inputFile + " skipped\n";
-    return;
-  }
-  std::chrono::duration<double> sum = std::chrono::duration<double>::zero();
-  int cnt = 1;
-  while (sum.count() < timeElapsed) {
-    auto t_start = std::chrono::high_resolution_clock::now();
-    runOnce(cnt, *mutator);
-
-    auto t_end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> cur = t_end - t_start;
-    if (verbose) {
-      std::cout << "Generted " + to_string(cnt) + "th copies in " +
-                       to_string((cur).count()) + " seconds\n";
-    }
-    sum += cur;
-    ++cnt;
-  }
-}
-
-void runOnce(int ith, Mutator &mutator){
-  mutator.mutateModule(getOutputSrcFilename(ith));
-
-  auto M1 = mutator.getModule();
-
-  if(!disableAlive) {
-    if (!verifier.has_value()) {
-      llvm::Triple targetTriple(M1.get()->getTargetTriple());
-      initVerifier(targetTriple);
-    }
-  }
-
-
-  const string optFunc = mutator.getCurrentFunction();
-  bool shouldLog=false;
-
-  if (llvm::Function *pf1 = M1->getFunction(optFunc); !disableAlive && pf1 != nullptr) {
-    if (!pf1->isDeclaration()) {
-      std::unique_ptr<llvm::Module> M2 = llvm::CloneModule(*M1);
-      llvm_util::optimize_module(M2.get(), optPass);
-      llvm::Function *pf2 = M2->getFunction(pf1->getName());
-      assert(pf2 != nullptr && "pf2 clone failed");
-      verifier->compareFunctions(*pf1, *pf2);
-      if(verifier->num_correct==0){
-        shouldLog=true;
-      }
-    }
-  }
-
-  if(shouldLog || disableAlive){
-    mutator.saveModule(getOutputSrcFilename(ith));
-    if(!disableAlive){
-      std::ofstream logFile(getOutputLogFilename(ith));
-      assert(logFile.is_open());
-      logFile<<"Current seed: "<<Random::getSeed()<<"\n";
-      logFile << "Source file:" << M1->getSourceFileName() << "\n";
-      logFile<<logStream.rdbuf();
-      logStream.str("");
-    }
   }
 }
