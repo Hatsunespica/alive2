@@ -78,7 +78,7 @@ void ShuffleHelper::shuffleCurrentBlock() {
   for (const auto &p : sblock) {
     sv.push_back(p);
   }
-  int idx = mutator->domVals.find(sv[0]);
+  bool isSV0Before=mutator->DT.dominates(sv[0], &*mutator->iit);
   llvm::Instruction *nextInst =
       (llvm::Instruction *)&*(mutator->vMap)[&*(++sv.back()->getIterator())];
   int findInSV = -1;
@@ -101,19 +101,23 @@ void ShuffleHelper::shuffleCurrentBlock() {
    * and then insert those dom-ed insts.
    */
   if (findInSV == -1) {
-    if (idx != -1) {
-      for (size_t i = 0; i + idx < mutator->domVals.size() && i < sv.size();
+    if (isSV0Before) {
+      for (size_t i = 0; i < sv.size() && sv[i] != &*mutator->iit;
            ++i) {
-        mutator->domVals[i + idx] = sv[i];
+        mutator->extraValues.push_back(&*mutator->vMap[sv[i]]);
       }
     }
   } else {
-    while (findInSV--) {
-      mutator->domVals.pop_back_tmp();
+    for(int i=0;i<findInSV;++i){
+      mutator->invalidValues.insert((llvm::Instruction*)&*mutator->vMap[sv[i]]);
     }
     for (size_t i = 0; i < sv.size() && sv[i]->getIterator() != mutator->iit;
          ++i) {
-      mutator->domVals.push_back_tmp(sv[i]);
+      llvm::Instruction* mappedVal=(llvm::Instruction*)&*mutator->vMap[sv[i]];
+      if(mutator->invalidValues.contains(mappedVal)){
+        mutator->invalidValues.erase(mappedVal);
+      }
+      mutator->extraValues.push_back(mappedVal);
     }
   }
 
@@ -305,7 +309,6 @@ bool RandomMoveHelper::canMutate(llvm::Function *func) {
 void RandomMoveHelper::mutate() {
   randomMoveInstruction(&*(mutator->iitInTmp));
   moved = true;
-  mutator->extraValues.clear();
 }
 
 void RandomMoveHelper::randomMoveInstruction(llvm::Instruction *inst) {
@@ -364,8 +367,7 @@ void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction *inst) {
     --newPosIt;
     v.push_back(&*newPosIt);
     // remove Insts in current basic block
-    assert(mutator->domVals.tmp_size() != 0);
-    mutator->domVals.pop_back_tmp();
+    mutator->invalidValues.insert(&*newPosIt);
   }
   newPosInst = &*newPosIt;
 
