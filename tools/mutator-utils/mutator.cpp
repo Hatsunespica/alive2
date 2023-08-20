@@ -490,20 +490,22 @@ llvm::Value *FunctionMutator::getRandomDominatedInstruction(llvm::Type *ty) {
 }
 
 llvm::Value *FunctionMutator::getRandomArgument(llvm::Type *ty) {
-  bool isIntTy = ty->isIntegerTy();
-  for(size_t i=0,pos=Random::getRandomUnsigned()%currentFunction->arg_size();
-       i<currentFunction->arg_size();++i,++pos){
-    llvm::Argument* curArg=currentFunction->getArg(pos);
-    if(pos==currentFunction->arg_size()){
-      pos=0;
-    }
-    if(currentFunction->getArg(pos)->getType()==ty){
-      return &*vMap[curArg];
-    }else if (isIntTy && curArg->getType()->isIntegerTy()) {
-      llvm::Instruction *insertBefore = &*functionInTmp->begin()->begin();
-      llvm::Value *valInTmp = &*vMap[curArg];
-      return mutator_util::updateIntegerSize(
-          valInTmp, (llvm::IntegerType *)ty, &*insertBefore);
+  if(currentFunction->arg_size()!=0){
+    bool isIntTy = ty->isIntegerTy();
+    for(size_t i=0,pos=Random::getRandomUnsigned()%currentFunction->arg_size();
+         i<currentFunction->arg_size();++i,++pos){
+      if(pos==currentFunction->arg_size()){
+        pos=0;
+      }
+      llvm::Argument* curArg=currentFunction->getArg(pos);
+      if(currentFunction->getArg(pos)->getType()==ty){
+        return &*vMap[curArg];
+      }else if (isIntTy && curArg->getType()->isIntegerTy()) {
+        llvm::Instruction *insertBefore = &*functionInTmp->begin()->begin();
+        llvm::Value *valInTmp = &*vMap[curArg];
+        return mutator_util::updateIntegerSize(
+            valInTmp, (llvm::IntegerType *)ty, &*insertBefore);
+      }
     }
   }
   return nullptr;
