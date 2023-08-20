@@ -457,8 +457,8 @@ llvm::Value *FunctionMutator::getRandomDominatedInstruction(llvm::Type *ty) {
     auto bbIt=currentFunction->begin();
     auto instIt=iit;
     bool isIntTy = ty->isIntegerTy();
-    for(size_t pos=Random::getRandomUnsigned()%currentFunction->arg_size();pos;--pos,++bbIt);
-    for(size_t i=0;i<currentFunction->arg_size();++i,++bbIt){
+    for(size_t pos=Random::getRandomUnsigned()%currentFunction->size();pos;--pos,++bbIt);
+    for(size_t i=0;i<currentFunction->size();++i,++bbIt){
       if(bbIt==currentFunction->end()){
         bbIt=currentFunction->begin();
       }
