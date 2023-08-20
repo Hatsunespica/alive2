@@ -2,26 +2,11 @@
 #include "mutator.h"
 
 void ShuffleHelper::init() {
-  shuffleUnitInBasicBlockIndex = 0;
-  /**
-   * find the same location as iit,bit,fit, and set shuffleBasicBlock
-   *
-   */
-  for (auto bit = mutator->currentFunction->begin();
-       bit != mutator->currentFunction->end();
-       ++bit, ++shuffleUnitInBasicBlockIndex) {
-    for (auto iit = bit->begin(); iit != bit->end(); ++iit) {
-      if (&*iit == (&*(mutator->iit))) {
-        goto varSetEnd;
-      }
-    }
-  }
-varSetEnd:
   llvm::Function *func = mutator->currentFunction;
-  shuffleBlockInFunction.resize(func->size());
-  size_t idx = 0;
-  for (auto bbIt = func->begin(); bbIt != func->end(); ++bbIt, ++idx) {
-    ShuffleUnitInBasicBlock &bSBlock = shuffleBlockInFunction[idx];
+  shuffleBlockInFunction.init(func->size());
+  for (auto bbIt = func->begin(); bbIt != func->end(); ++bbIt) {
+    shuffleBlockInFunction[&*bbIt]=ShuffleUnitInBasicBlock();
+    ShuffleUnitInBasicBlock &bSBlock = shuffleBlockInFunction[&*bbIt];
     ShuffleUnit tmp;
     std::unordered_set<llvm::Value *> us;
     auto instIt = bbIt->begin();
@@ -67,13 +52,13 @@ varSetEnd:
 }
 
 bool ShuffleHelper::shouldMutate() {
-  return shuffleBlockInFunction[shuffleUnitInBasicBlockIndex].size() >
+  return shuffleBlockInFunction[&*mutator->bit].size() >
          shuffleUnitIndex;
 }
 
 void ShuffleHelper::shuffleCurrentBlock() {
   ShuffleUnit &sblock =
-      shuffleBlockInFunction[shuffleUnitInBasicBlockIndex][shuffleUnitIndex];
+      shuffleBlockInFunction[&*mutator->bit][shuffleUnitIndex];
   llvm::SmallVector<llvm::Instruction *> sv;
   for (const auto &p : sblock) {
     sv.push_back(p);
