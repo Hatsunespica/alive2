@@ -131,6 +131,7 @@ class FunctionMutator {
   void moveToNextBasicBlock();
   void moveToNextMutant();
   void resetIterator();
+  void resetRandomIterator();
 
   llvm::SmallVector<std::unique_ptr<MutationHelper>> helpers;
   llvm::SmallVector<size_t> whenMoveToNextInstFuncs;

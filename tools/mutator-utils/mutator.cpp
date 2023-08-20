@@ -193,6 +193,15 @@ void FunctionMutator::resetIterator() {
   initAtFunctionEntry();
 }
 
+void FunctionMutator::resetRandomIterator(){
+  bit=currentFunction->begin();
+  for(size_t i=Random::getRandomUnsigned()%currentFunction->size();i;--i,++bit);
+  iit=bit->begin();
+  for(size_t i=Random::getRandomUnsigned()%bit->size();i;--i,++iit);
+  initAtNewBasicBlock();
+  moveToNextMutant();
+}
+
 bool FunctionMutator::canMutate(const llvm::Instruction &inst,
                                 const llvm::StringSet<> &filterSet) {
   // contain immarg attributes
