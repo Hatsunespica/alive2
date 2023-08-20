@@ -685,6 +685,9 @@ void ModuleMutator::mutateModule(const std::string &outputFileName) {
       functionMutants[i]->removeTmpFunction();
     }
   } else {
+    if(randomMutate){
+      functionMutants[curFunction]->resetRandomIterator();
+    }
     functionMutants[curFunction]->mutate();
     curFunctionName =
         functionMutants[curFunction]->getCurrentFunction()->getName();

@@ -131,7 +131,6 @@ class FunctionMutator {
   void moveToNextBasicBlock();
   void moveToNextMutant();
   void resetIterator();
-  void resetRandomIterator();
 
   llvm::SmallVector<std::unique_ptr<MutationHelper>> helpers;
   llvm::SmallVector<size_t> whenMoveToNextInstFuncs;
@@ -193,6 +192,7 @@ public:
   static bool canMutate(const llvm::Function *function,
                         const llvm::StringSet<> &filterSet);
   void mutate();
+  void resetRandomIterator();
   void print();
   void setDebug(bool debug) {
     this->debug = debug;
@@ -214,7 +214,7 @@ class ModuleMutator : public Mutator {
   // calls.
   llvm::StringSet<> filterSet, invalidFunctions;
   std::shared_ptr<llvm::Module> tmpCopy;
-  bool onEveryFunction;
+  bool onEveryFunction, randomMutate;
   llvm::ValueToValueMapTy vMap;
   llvm::SmallVector<llvm::Value *> globals;
 
@@ -228,9 +228,10 @@ public:
   ModuleMutator(bool debug = false) : Mutator(debug){};
   ModuleMutator(std::shared_ptr<llvm::Module> pm_,
                 const llvm::StringSet<> &invalidFunctions, bool debug = false,
-                bool onEveryFunction = false)
+                bool onEveryFunction = false, bool randomMutate=false)
       : Mutator(debug), invalidFunctions(invalidFunctions), tmpCopy(nullptr),
-        onEveryFunction(onEveryFunction), curFunction(0) {
+        onEveryFunction(onEveryFunction), randomMutate(randomMutate),
+        curFunction(0) {
     pm = pm_;
   };
   ModuleMutator(std::shared_ptr<llvm::Module> pm_, bool debug = false,

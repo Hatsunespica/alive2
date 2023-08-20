@@ -83,6 +83,20 @@ llvm::cl::opt<bool> removeUndef(
     llvm::cl::desc("remove all undef in all functions in the input module"),
     llvm::cl::cat(mutatorArgs));
 
+llvm::cl::opt<bool> masterRNG(
+    LLVM_ARGS_PREFIX "masterRNG",
+    llvm::cl::value_desc("turn on master RNG mode"),
+    llvm::cl::desc("master RNG will generate a list of random seeds and set use"
+                   " one seed for every mutant"),
+    llvm::cl::cat(mutatorArgs));
+
+llvm::cl::opt<bool> randomMutate(
+    LLVM_ARGS_PREFIX "randomMutate",
+    llvm::cl::value_desc("turn on randomMutate mode"),
+    llvm::cl::desc("Random mutate mode will random mutate an instruction in the"
+                   " function instead of linear sequence"),
+    llvm::cl::cat(mutatorArgs));
+
 llvm::cl::opt<bool> verbose(LLVM_ARGS_PREFIX "v",
                             llvm::cl::value_desc("verbose mode"),
                             llvm::cl::desc("specify if verbose mode is on"),
@@ -131,6 +145,7 @@ llvm::cl::list<size_t>
                llvm::cl::CommaSeparated, llvm::cl::cat(mutatorArgs));
 
 
+std::vector<unsigned> RNGseeds;
 unique_ptr<Cache> cache;
 std::stringstream logStream;
 // To eliminate extra verifier construction;
@@ -214,8 +229,16 @@ see alive-tv --version for LLVM version info,
   if (outputFolder.back() != '/')
     outputFolder += '/';
 
+
   if (randomSeed >= 0) {
     Random::setSeed((unsigned)randomSeed);
+    if(masterRNG){
+      assert(numCopy > 0 && "master RNG setting should only be allowed under copy mode!\n");
+      RNGseeds.resize(numCopy);
+      for(int i=0;i<numCopy;++i){
+        RNGseeds[i]=Random::getRandomUnsigned();
+      }
+    }
   }
 
   if (numCopy < 0 && timeElapsed < 0) {
@@ -333,7 +356,7 @@ bool verifyInput(std::shared_ptr<llvm::Module>& M1){
 }
 
 void copyMode(std::shared_ptr<llvm::Module>& pm){
-    if (copyFunctions != 0) {
+  if (copyFunctions != 0) {
     mutator_util::propagateFunctionsInModule(pm.get(), copyFunctions);
   }
   std::unique_ptr<Mutator> mutator = std::make_unique<ModuleMutator>(
@@ -343,6 +366,9 @@ void copyMode(std::shared_ptr<llvm::Module>& pm){
     for (int i = 0; i < numCopy; ++i) {
       if (verbose) {
         std::cout << "Running " << i << "th copies." << std::endl;
+      }
+      if(masterRNG){
+        Random::setSeed(RNGseeds[i]);
       }
       runOnce(i, *mutator);
 
