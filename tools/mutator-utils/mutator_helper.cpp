@@ -406,8 +406,11 @@ void RandomMoveHelper::randomMoveInstructionBackward(llvm::Instruction *inst) {
   if (pos + 1 == endPos) {
     return;
   }
-
-  newPos = Random::getRandomInt() % (endPos - pos) + 1 + pos;
+  // newPos should be in [pos+2, endPos]
+  // Because we use moveBefore, moving pos before pos + 1 makes no change
+  newPos = Random::getRandomInt() % (endPos - pos - 1) + 2 + pos;
+  //llvm::errs()<<"AAAAAAAAAAAAAA\n";
+  //llvm::errs()<<pos<<" "<<newPos<<" "<<endPos<<"\n";
   // need fix all insts used current inst in [pos,newPos]
   llvm::Instruction *newPosInst = inst;
   llvm::BasicBlock::iterator newPosIt = newPosInst->getIterator();
@@ -432,6 +435,9 @@ void RandomMoveHelper::randomMoveInstructionBackward(llvm::Instruction *inst) {
     newPosIt = newPosInst->getIterator();
     mutator->extraValues.push_back(newPosInst);
   }
+  //move before newPos
+  ++newPosIt;
+  newPosInst = &*newPosIt;
   inst = (llvm::Instruction *)extraVals[0];
   inst->moveBefore(newPosInst);
   mutator->iitInTmp = inst->getIterator();
