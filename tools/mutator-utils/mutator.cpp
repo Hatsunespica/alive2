@@ -418,12 +418,19 @@ void FunctionMutator::addFunctionArguments(
 void FunctionMutator::fixAllValues(llvm::SmallVector<llvm::Value *> &vals) {
   if (!lazyUpdateInsts.empty()) {
     llvm::ValueToValueMapTy VMap;
+    llvm::DenseSet<llvm::Instruction*> newInvalidValues;
     addFunctionArguments(lazyUpdateArgTys, VMap);
     for (size_t i = 0; i < extraValues.size(); ++i) {
       if (VMap.find(extraValues[i]) != VMap.end()) {
         extraValues[i] = (llvm::Value *)&*VMap[extraValues[i]];
       }
     }
+    for(auto it=invalidValues.begin();it!=invalidValues.end();++it){
+      if(VMap.find(*it)!=VMap.end()){
+        newInvalidValues.insert((llvm::Instruction*)&*VMap[*it]);
+      }
+    }
+    invalidValues=std::move(newInvalidValues);
     for (size_t i = 0; i < vals.size(); ++i) {
       vals[i] = (llvm::Value *)&*VMap[vals[i]];
     }
