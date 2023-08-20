@@ -78,13 +78,12 @@ void ShuffleHelper::shuffleCurrentBlock() {
   for (const auto &p : sblock) {
     sv.push_back(p);
   }
-  bool isSV0Before=mutator->DT.dominates(sv[0], &*mutator->iit);
   llvm::Instruction *nextInst =
       (llvm::Instruction *)&*(mutator->vMap)[&*(++sv.back()->getIterator())];
-  int findInSV = -1;
-  for (int i = 0; i < (int)sv.size(); ++i) {
+  bool findInSV = false;
+  for (size_t i = 0; i < sv.size(); ++i) {
     if (sv[i]->getIterator() == mutator->iit) {
-      findInSV = i;
+      findInSV = true;
       break;
     }
   }
@@ -100,15 +99,8 @@ void ShuffleHelper::shuffleCurrentBlock() {
    * current it is in shuffle interval. Then end of domInst must be pop first
    * and then insert those dom-ed insts.
    */
-  if (findInSV == -1) {
-    if (isSV0Before) {
-      for (size_t i = 0; i < sv.size() && sv[i] != &*mutator->iit;
-           ++i) {
-        mutator->extraValues.push_back(&*mutator->vMap[sv[i]]);
-      }
-    }
-  } else {
-    for(int i=0;i<findInSV;++i){
+  if (findInSV) {
+    for(size_t i=0;i<sv.size();++i){
       mutator->invalidValues.insert((llvm::Instruction*)&*mutator->vMap[sv[i]]);
     }
     for (size_t i = 0; i < sv.size() && sv[i]->getIterator() != mutator->iit;
@@ -134,7 +126,10 @@ void ShuffleHelper::shuffleCurrentBlock() {
 
 void ShuffleHelper::debug() {
   llvm::errs() << "\nInstructions shuffled\n";
-  mutator->iitInTmp->print(llvm::errs());
+  mutator->bitInTmp->print(llvm::errs());
+  for(auto it=mutator->invalidValues.begin();it!=mutator->invalidValues.end();++it){
+    (*it)->dump();
+  }
   llvm::errs() << "\n";
 };
 
