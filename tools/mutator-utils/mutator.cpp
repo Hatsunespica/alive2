@@ -462,7 +462,7 @@ llvm::Value *FunctionMutator::getRandomDominatedInstruction(llvm::Type *ty) {
           if(instIt==bbIt->end()){
             instIt=bbIt->begin();
           }
-          if(invalidValues.contains(&*instIt)){
+          if(invalidValues.contains((llvm::Instruction*)&*vMap[&*instIt])){
             continue;
           }
           if(DT.dominates(&*instIt, &*iit)){
@@ -504,10 +504,18 @@ llvm::Value *FunctionMutator::getRandomArgument(llvm::Type *ty) {
 
 llvm::Value *FunctionMutator::getRandomValueFromExtraValue(llvm::Type *ty) {
   if (ty != nullptr && !extraValues.empty()) {
-    return mutator_util::findRandomInArray<llvm::Value *, llvm::Type *>(
-        extraValues, ty,
-        [](llvm::Value *v, llvm::Type *ty) { return v->getType() == ty; },
-        nullptr);
+    for(size_t i=0,pos=Random::getRandomUnsigned()%extraValues.size();i<extraValues.size();++i,++pos){
+      if(pos==extraValues.size()){
+        pos=0;
+      }
+      if(llvm::Instruction* inst=llvm::dyn_cast<llvm::Instruction>(extraValues[pos]); inst){
+        if(!invalidValues.contains(inst) && inst->getType()==ty){
+          return extraValues[pos];
+        }
+      }else if(extraValues[pos]->getType()==ty){
+        return extraValues[pos];
+      }
+    }
   }
   return nullptr;
 }
