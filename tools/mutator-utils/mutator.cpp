@@ -199,7 +199,10 @@ void FunctionMutator::resetRandomIterator(){
   iit=bit->begin();
   for(size_t i=Random::getRandomUnsigned()%bit->size();i;--i,++iit);
   initAtNewBasicBlock();
+  initAtFunctionEntry();
   moveToNextMutant();
+  bitInTmp=((llvm::BasicBlock*)&*vMap[&*bit])->getIterator();
+  iitInTmp=((llvm::Instruction*)&*vMap[&*iit])->getIterator();
 }
 
 bool FunctionMutator::canMutate(const llvm::Instruction &inst,
@@ -686,6 +689,7 @@ void ModuleMutator::mutateModule(const std::string &outputFileName) {
     }
   } else {
     if(randomMutate){
+      curFunction = Random::getRandomUnsigned() % functionMutants.size();
       functionMutants[curFunction]->resetRandomIterator();
     }
     functionMutants[curFunction]->mutate();
@@ -704,6 +708,7 @@ void ModuleMutator::saveModule(const std::string &outputFileName) {
   std::error_code ec;
   llvm::raw_fd_ostream fout(outputFileName, ec);
   fout<<";"<<curFunctionName<<"\n";
+  fout<<";current seed:" << Random::getSeed()<<"\n";
   fout << *tmpCopy;
   fout.close();
   if (debug) {

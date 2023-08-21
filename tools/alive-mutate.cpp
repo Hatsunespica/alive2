@@ -366,9 +366,12 @@ void copyMode(std::shared_ptr<llvm::Module>& pm){
     mutator_util::propagateFunctionsInModule(pm.get(), copyFunctions);
   }
   std::unique_ptr<Mutator> mutator = std::make_unique<ModuleMutator>(
-      pm, invalidFunctions, verbose, onEveryFunction);
+      pm, invalidFunctions, verbose, onEveryFunction, randomMutate);
   if (bool init = mutator->init(); init) {
-
+    //Eliminate the influence of verifyInput
+    if(!masterRNG && randomSeed >= 0){
+      Random::setSeed((unsigned)randomSeed);
+    }
     for (int i = 0; i < numCopy; ++i) {
       if (verbose) {
         std::cout << "Running " << i << "th copies." << std::endl;
@@ -391,7 +394,7 @@ void timeMode(std::shared_ptr<llvm::Module>& pm){
     mutator_util::propagateFunctionsInModule(pm.get(), copyFunctions);
   }
   std::unique_ptr<Mutator> mutator = std::make_unique<ModuleMutator>(
-      pm, invalidFunctions, verbose, onEveryFunction);
+      pm, invalidFunctions, verbose, onEveryFunction, randomMutate);
   bool init = mutator->init();
   if (!init) {
     cerr << "Cannot find any location to mutate, " + inputFile + " skipped\n";
