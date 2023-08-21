@@ -5,7 +5,7 @@ import random
 
 TEST_FILES_DIR = "."
 TMP_FILES_DIR = "."
-COUNT=10
+COUNT=100
 #would be read from a fixed external file
 #seed=random.randint(0, (1<<31)-1)
 seed=0
@@ -17,11 +17,11 @@ TMP_DIRS = ["./bench1/", "./bench2/"]
 RANDOM_SEEDS_COMMAND="~/GitRepo/alive2/build/RNG -n {count} -s {seed} > {seeds_file}"
 
 ALIVE_MUTATE_COMMAND = ("~/GitRepo/alive2/build/alive-mutate {input} {dir} -n {count} "
-                  "--disable-undef-input --disable-poison-input --removeUndef --disableAlive"
+                  "--disable-undef-input --disable-poison-input --removeUndef"
                         " --randomMutate --masterRNG -s {seed}")
 
 ALIVE_MUTATE_NON_VERIFY = ("~/GitRepo/alive2/build/alive-mutate {input} {dir} -n {count} "
-                  "--disableAlive --removeUndef -s {seed}")
+                  "--disableAlive --removeUndef --randomMutate -s {seed}")
 
 ALIVE_TV_COMMAND=("~/GitRepo/alive2/build/alive-tv {input} --quiet --disable-undef-input --disable-poison-input "
                   "--src-fn={func}")
@@ -72,16 +72,15 @@ def bench1(input):
 
 def bench2(input):
     result=0
-    for i in range(COUNT):
+    for i in range(COUNT-1,-1,-1):
         alive_non_verify=ALIVE_MUTATE_NON_VERIFY.format(input=input, dir=TMP_DIRS[1], count=1, seed=seeds[i])
-        #print(alive_non_verify)
+        print(alive_non_verify)
         start=time.time()
         os.system(alive_non_verify)
-        #print(alive_non_verify)
         end=time.time()
         result+=end-start
         #execute alive-mutate
-        outputFile=getOutputFilename(input,i)
+        outputFile=getOutputFilename(input,0)
         currentFunction=getTargetFunction(outputFile)
         alive_tv=ALIVE_TV_COMMAND.format(input=outputFile, func=currentFunction)
         #print(alive_tv)
@@ -90,8 +89,9 @@ def bench2(input):
         os.system(alive_tv)
         #print(alive_tv)
         end=time.time()
+        os.rename(outputFile,getOutputFilename(input,i))
         result+=end-start
-    return result;
+    return result
 
 def performExperiment():
     make_tmp_dirs()
