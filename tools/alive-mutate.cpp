@@ -445,11 +445,13 @@ void runOnce(int ith, Mutator &mutator){
 
   if(shouldLog || disableAlive){
     mutator.saveModule(getOutputSrcFilename(ith));
-    std::ofstream logFile(getOutputLogFilename(ith));
-    assert(logFile.is_open());
-    logFile<<"Current seed: "<<Random::getSeed()<<"\n";
-    logFile << "Source file:" << M1->getSourceFileName() << "\n";
-    logFile<<logStream.rdbuf();
-    logStream.str("");
+    if(!disableAlive){
+      std::ofstream logFile(getOutputLogFilename(ith));
+      assert(logFile.is_open());
+      logFile<<"Current seed: "<<Random::getSeed()<<"\n";
+      logFile << "Source file:" << M1->getSourceFileName() << "\n";
+      logFile<<logStream.rdbuf();
+      logStream.str("");
+    }
   }
 }
