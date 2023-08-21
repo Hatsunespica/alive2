@@ -601,7 +601,7 @@ void FunctionAttributeHelper::init() {
 
 void FunctionAttributeHelper::mutate() {
   updated = true;
-  llvm::Function *func = mutator->currentFunction;
+  llvm::Function *func = mutator->functionInTmp;
   setFuncAttr(llvm::Attribute::AttrKind::NoFree, Random::getRandomBool());
   if (func->getReturnType()->isIntegerTy()) {
     llvm::IntegerType *intTy = (llvm::IntegerType *)func->getReturnType();
@@ -655,6 +655,7 @@ void FunctionAttributeHelper::mutate() {
 
 void FunctionAttributeHelper::debug() {
   llvm::errs() << "FunctionAttributeHelper: Function attributes updated\n";
+
 }
 
 void GEPHelper::mutate() {
