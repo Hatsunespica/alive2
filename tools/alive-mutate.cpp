@@ -97,6 +97,12 @@ llvm::cl::opt<bool> randomMutate(
                    " function instead of linear sequence"),
     llvm::cl::cat(mutatorArgs));
 
+llvm::cl::opt<bool> disableAlive(
+    LLVM_ARGS_PREFIX "disableAlive",
+    llvm::cl::value_desc("a flag to disable alive2 verifications"),
+    llvm::cl::desc("don't verify mutated result by alive2"),
+    llvm::cl::cat(mutatorArgs), llvm::cl::init(false));
+
 llvm::cl::opt<bool> verbose(LLVM_ARGS_PREFIX "v",
                             llvm::cl::value_desc("verbose mode"),
                             llvm::cl::desc("specify if verbose mode is on"),
@@ -413,16 +419,18 @@ void runOnce(int ith, Mutator &mutator){
 
   auto M1 = mutator.getModule();
 
-  if(!verifier.has_value()){
-    llvm::Triple targetTriple(M1.get()->getTargetTriple());
-    initVerifier(targetTriple);
+  if(!disableAlive) {
+    if (!verifier.has_value()) {
+      llvm::Triple targetTriple(M1.get()->getTargetTriple());
+      initVerifier(targetTriple);
+    }
   }
 
 
   const string optFunc = mutator.getCurrentFunction();
   bool shouldLog=false;
 
-  if (llvm::Function *pf1 = M1->getFunction(optFunc); pf1 != nullptr) {
+  if (llvm::Function *pf1 = M1->getFunction(optFunc); !disableAlive && pf1 != nullptr) {
     if (!pf1->isDeclaration()) {
       std::unique_ptr<llvm::Module> M2 = llvm::CloneModule(*M1);
       llvm_util::optimize_module(M2.get(), optPass);
@@ -435,7 +443,7 @@ void runOnce(int ith, Mutator &mutator){
     }
   }
 
-  if(shouldLog){
+  if(shouldLog || disableAlive){
     mutator.saveModule(getOutputSrcFilename(ith));
     std::ofstream logFile(getOutputLogFilename(ith));
     assert(logFile.is_open());
