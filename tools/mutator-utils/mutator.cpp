@@ -703,6 +703,7 @@ void ModuleMutator::mutateModule(const std::string &outputFileName) {
 void ModuleMutator::saveModule(const std::string &outputFileName) {
   std::error_code ec;
   llvm::raw_fd_ostream fout(outputFileName, ec);
+  fout<<";"<<curFunctionName<<"\n";
   fout << *tmpCopy;
   fout.close();
   if (debug) {
