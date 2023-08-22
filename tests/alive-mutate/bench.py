@@ -117,7 +117,8 @@ def inputCheck(input):
     alive_mutate = ALIVE_MUTATE_MASTER_NON_VERIFY_COMMAND.format(
         input=input, dir=TMP_DIRS[0], count=1, seed=seed)
     result = subprocess.check_output(alive_mutate +"; exit 0", stderr=subprocess.STDOUT, shell=True)
-    return not ("All functions cannot pass input check" in str(result))
+    return not (("All functions cannot pass input check" in str(result)) or
+                ("annot find any locations to mutate" in str(result)))
 
 
 def performExperiment():
