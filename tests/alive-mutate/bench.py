@@ -16,9 +16,9 @@ seeds_file="randomSeeds.txt"
 GEN_TESTS_DIR = "./tests/"
 TMP_DIRS = ["./bench1/", "./bench2/"]
 
-RANDOM_SEEDS_COMMAND="~/GitRepo/alive2/build/RNG -n {count} -s {seed} > {seeds_file}"
-
 ALIVE_PATH="~/GitRepo/alive2/build/"
+
+RANDOM_SEEDS_COMMAND=ALIVE_PATH + "RNG -n {count} -s {seed} > {seeds_file}"
 
 ALIVE_MUTATE_COMMAND = (ALIVE_PATH+ "alive-mutate {input} {dir} -n {count} "
                   "--disable-undef-input --disable-poison-input --removeUndef"
