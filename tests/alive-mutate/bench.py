@@ -3,6 +3,7 @@ import time
 import shutil
 import random
 import filecmp
+import subprocess
 
 TEST_FILES_DIR = "./tests/"
 TMP_FILES_DIR = "."
@@ -17,18 +18,20 @@ TMP_DIRS = ["./bench1/", "./bench2/"]
 
 RANDOM_SEEDS_COMMAND="~/GitRepo/alive2/build/RNG -n {count} -s {seed} > {seeds_file}"
 
-ALIVE_MUTATE_COMMAND = ("~/GitRepo/alive2/build/alive-mutate {input} {dir} -n {count} "
+ALIVE_PATH="~/GitRepo/alive2/build/"
+
+ALIVE_MUTATE_COMMAND = (ALIVE_PATH+ "alive-mutate {input} {dir} -n {count} "
                   "--disable-undef-input --disable-poison-input --removeUndef"
                         " --randomMutate --masterRNG -s {seed}")
 
-ALIVE_MUTATE_MASTER_NON_VERIFY_COMMAND = ("~/GitRepo/alive2/build/alive-mutate {input} {dir} -n {count} "
+ALIVE_MUTATE_MASTER_NON_VERIFY_COMMAND = (ALIVE_PATH+"alive-mutate {input} {dir} -n {count} "
                   "--disable-undef-input --disable-poison-input --removeUndef"
                         " --randomMutate --masterRNG --disableAlive -s {seed}")
 
-ALIVE_MUTATE_NON_VERIFY = ("~/GitRepo/alive2/build/alive-mutate {input} {dir} -n {count} "
+ALIVE_MUTATE_NON_VERIFY = (ALIVE_PATH+"alive-mutate {input} {dir} -n {count} "
                   "--disableAlive --removeUndef --randomMutate -s {seed}")
 
-ALIVE_TV_COMMAND=("~/GitRepo/alive2/build/alive-tv {input} --quiet --disable-undef-input --disable-poison-input "
+ALIVE_TV_COMMAND=(ALIVE_PATH+"alive-tv {input} --quiet --disable-undef-input --disable-poison-input "
                   "--src-fn={func}")
 
 def getOutputFilename(input,ith):
@@ -90,7 +93,7 @@ def bench2(input):
         outputFile=getOutputFilename(input,0)
         currentFunction=getTargetFunction(outputFile)
         alive_tv=ALIVE_TV_COMMAND.format(input=outputFile, func=currentFunction)
-        #print(alive_tv)
+        print(alive_tv)
         start = time.time()
         # execute alive-tv
         os.system(alive_tv)
@@ -110,6 +113,12 @@ def validityCheck(input):
             return False
     return True
 
+def inputCheck(input):
+    alive_mutate = ALIVE_MUTATE_MASTER_NON_VERIFY_COMMAND.format(
+        input=input, dir=TMP_DIRS[0], count=1, seed=seed)
+    result = subprocess.check_output(alive_mutate +"; exit 0", stderr=subprocess.STDOUT, shell=True)
+    return not ("All functions cannot pass input check" in str(result))
+
 
 def performExperiment():
     make_tmp_dirs()
@@ -124,21 +133,25 @@ def performExperiment():
     for i,file in enumerate(os.listdir(TEST_FILES_DIR)):
         whole_file=TEST_FILES_DIR+file
         if os.path.isfile(whole_file) and whole_file.endswith(".ll"):
-            bench2Res = bench2(file)
-            print("bench2 ", bench2Res)
-            bench1Res=bench1(file)
-            print("bench1 ",bench1Res)
-            validRes=validityCheck(whole_file)
+            if inputCheck(whole_file):
+                bench2Res = bench2(file)
+                print("bench2 ", bench2Res)
+                bench1Res=bench1(file)
+                print("bench1 ",bench1Res)
+                validRes=validityCheck(whole_file)
+            else:
+                validRes=False
             if validRes:
                 total+=1
                 bench1Sum+=bench1Res
                 bench2Sum+=bench2Res
             else:
-                invalidLst.append(lst)
+                invalidLst.append(file)
 
     print("Total: ", total)
     print("Bench1 Sum:", bench1Sum)
     print("Bench2 Sum:", bench2Sum)
+    print("Total Invalid:", len(invalidLst))
     print("Invalid files:", invalidLst)
 
 
