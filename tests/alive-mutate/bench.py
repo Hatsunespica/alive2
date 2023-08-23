@@ -5,7 +5,7 @@ import random
 import filecmp
 import subprocess
 
-TEST_FILES_DIR = "./tests/"
+TEST_FILES_DIR = "."
 TMP_FILES_DIR = "."
 COUNT=10
 #would be read from a fixed external file
@@ -29,7 +29,8 @@ ALIVE_MUTATE_MASTER_NON_VERIFY_COMMAND = (ALIVE_PATH+"alive-mutate {input} {dir}
                         " --randomMutate --masterRNG --disableAlive -s {seed}")
 
 ALIVE_MUTATE_NON_VERIFY = (ALIVE_PATH+"alive-mutate {input} {dir} -n {count} "
-                  "--disableAlive --removeUndef --randomMutate -s {seed}")
+                  "--disableAlive --removeUndef --randomMutate --disable-undef-input --disable-poison-input"
+                                      " -s {seed}")
 
 ALIVE_TV_COMMAND=(ALIVE_PATH+"alive-tv {input} --quiet --disable-undef-input --disable-poison-input "
                   "--src-fn={func}")
@@ -114,11 +115,12 @@ def validityCheck(input):
     return True
 
 def inputCheck(input):
-    alive_mutate = ALIVE_MUTATE_MASTER_NON_VERIFY_COMMAND.format(
+    alive_mutate = ALIVE_MUTATE_COMMAND.format(
         input=input, dir=TMP_DIRS[0], count=1, seed=seed)
     result = subprocess.check_output(alive_mutate +"; exit 0", stderr=subprocess.STDOUT, shell=True)
-    return not (("All functions cannot pass input check" in str(result)) or
+    r =not (("All functions cannot pass input check" in str(result)) or
                 ("annot find any locations to mutate" in str(result)))
+    return r
 
 
 def performExperiment():
