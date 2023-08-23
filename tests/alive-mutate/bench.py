@@ -5,9 +5,9 @@ import random
 import filecmp
 import subprocess
 
-TEST_FILES_DIR = "."
+TEST_FILES_DIR = "./tests/"
 TMP_FILES_DIR = "."
-COUNT=10
+COUNT=20
 #would be read from a fixed external file
 #seed=random.randint(0, (1<<31)-1)
 seed=0
@@ -117,9 +117,11 @@ def validityCheck(input):
 def inputCheck(input):
     alive_mutate = ALIVE_MUTATE_COMMAND.format(
         input=input, dir=TMP_DIRS[0], count=1, seed=seed)
-    result = subprocess.check_output(alive_mutate +"; exit 0", stderr=subprocess.STDOUT, shell=True)
-    r =not (("All functions cannot pass input check" in str(result)) or
-                ("annot find any locations to mutate" in str(result)))
+    result = str(subprocess.check_output(alive_mutate +"; exit 0", stderr=subprocess.STDOUT, shell=True))
+    r =not (("All functions cannot pass input check" in result) or
+                ("annot find any locations to mutate" in result) or
+            ("core dumped" in result) or
+            ("Stack dump" in result))
     return r
 
 
@@ -129,8 +131,8 @@ def performExperiment():
     global TEST_FILES_DIR
     if TEST_FILES_DIR[-1]!='/':
         TEST_FILES_DIR+='/'
-    bench1Sum=0
-    bench2Sum=0
+    bench1Lst=[]
+    bench2Lst=[]
     total=0
     invalidLst=[]
     for i,file in enumerate(os.listdir(TEST_FILES_DIR)):
@@ -146,17 +148,19 @@ def performExperiment():
                 validRes=False
             if validRes:
                 total+=1
-                bench1Sum+=bench1Res
-                bench2Sum+=bench2Res
+                bench1Lst.append(bench1Res)
+                bench2Lst.append(bench2Res)
             else:
                 invalidLst.append(file)
 
     print("Total: ", total)
-    print("Bench1 Sum:", bench1Sum)
-    print("Bench2 Sum:", bench2Sum)
+    print("Bench1 lst:", bench1Lst)
+    print("Bench2 lst:", bench2Lst)
+    perfList=[bench2Lst[i]/bench1Lst[i] for i in range(len(bench1Lst))]
+    print("perf lst:", perfList)
+    print("Avg perf:", sum(perfList)/len(perfList))
     print("Total Invalid:", len(invalidLst))
     print("Invalid files:", invalidLst)
-
 
 
 #bench1()
