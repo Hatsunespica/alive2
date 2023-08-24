@@ -135,32 +135,39 @@ def performExperiment():
     bench2Lst=[]
     total=0
     invalidLst=[]
+    invalidInput=[]
     for i,file in enumerate(os.listdir(TEST_FILES_DIR)):
         whole_file=TEST_FILES_DIR+file
         if os.path.isfile(whole_file) and whole_file.endswith(".ll"):
-            if inputCheck(whole_file):
+            inputRes=inputCheck(whole_file)
+            if inputRes:
                 bench2Res = bench2(file)
                 print("bench2 ", bench2Res)
                 bench1Res=bench1(file)
                 print("bench1 ",bench1Res)
                 validRes=validityCheck(whole_file)
             else:
-                validRes=False
-            if validRes:
+                inputRes=False
+            if validRes and inputCheck:
                 total+=1
-                bench1Lst.append(bench1Res)
-                bench2Lst.append(bench2Res)
-            else:
+                bench1Lst.append((bench1Res,file))
+                bench2Lst.append((bench2Res,file))
+            elif not validRes:
                 invalidLst.append(file)
+            elif not inputRes:
+                invalidInput.append(file)
+
 
     print("Total: ", total)
     print("Bench1 lst:", bench1Lst)
     print("Bench2 lst:", bench2Lst)
-    perfList=[bench2Lst[i]/bench1Lst[i] for i in range(len(bench1Lst))]
+    perfList=[(bench2Lst[i][0]/bench1Lst[i][0], bench1Lst[i][1]) for i in range(len(bench1Lst))]
     print("perf lst:", perfList)
-    print("Avg perf:", sum(perfList)/len(perfList))
-    print("Total Invalid:", len(invalidLst))
-    print("Invalid files:", invalidLst)
+    print("Avg perf:", sum([tmp[0] for tmp in perfList])/len(perfList))
+    print("Total not-verified:", len(invalidLst))
+    print("Not-verified files:", invalidLst)
+    print("Total invalid file:", len(invalidInput))
+    print("Invalid files:", invalidInput)
 
 
 #bench1()
