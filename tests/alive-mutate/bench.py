@@ -16,6 +16,8 @@ seeds_file="randomSeeds.txt"
 GEN_TESTS_DIR = "./tests/"
 TMP_DIRS = ["./bench1/", "./bench2/"]
 
+RES_FILE="res.txt"
+
 ALIVE_PATH="~/GitRepo/alive2/build/"
 
 RANDOM_SEEDS_COMMAND=ALIVE_PATH + "RNG -n {count} -s {seed} > {seeds_file}"
@@ -158,16 +160,22 @@ def performExperiment():
                 invalidInput.append(file)
 
 
-    print("Total: ", total)
-    print("Bench1 lst:", bench1Lst)
-    print("Bench2 lst:", bench2Lst)
+    if os.path.exists(RES_FILE):
+        f=open(RES_FILE, "a")
+    else:
+        f=open(RES_FILE,"w")
+    f.write("Total: "+str(total)+"\n")
+    f.write("Bench1 lst:"+str(bench1Lst)+"\n")
+    f.write("Bench2 lst:"+str( bench2Lst)+"\n")
     perfList=[(bench2Lst[i][0]/bench1Lst[i][0], bench1Lst[i][1]) for i in range(len(bench1Lst))]
-    print("perf lst:", perfList)
-    print("Avg perf:", sum([tmp[0] for tmp in perfList])/len(perfList))
-    print("Total not-verified:", len(invalidLst))
-    print("Not-verified files:", invalidLst)
-    print("Total invalid file:", len(invalidInput))
-    print("Invalid files:", invalidInput)
+    f.write("perf lst:"+str(perfList)+"\n")
+    f.write("Avg perf:"+str(sum([tmp[0] for tmp in perfList])/len(perfList))+"\n")
+    f.write("Total not-verified:"+str(len(invalidLst))+"\n")
+    f.write("Not-verified files:"+str( invalidLst)+"\n")
+    f.write("Total invalid file:"+str(len(invalidInput))+"\n")
+    f.write("Invalid files:"+str(invalidInput)+"\n")
+    f.write("=========\n")
+    f.close()
 
 
 #bench1()
