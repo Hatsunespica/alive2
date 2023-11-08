@@ -5,9 +5,9 @@ import random
 import filecmp
 import subprocess
 
-TEST_FILES_DIR = "./tests/"
+TEST_FILES_DIR = "."
 TMP_FILES_DIR = "."
-COUNT=20
+COUNT=1000
 #would be read from a fixed external file
 #seed=random.randint(0, (1<<31)-1)
 seed=0
@@ -85,7 +85,9 @@ def bench1(input):
 
 def bench2(input):
     result=0
+    alive_tv_res=0
     for i in range(COUNT-1,-1,-1):
+        alive_tv_time=None
         alive_non_verify=ALIVE_MUTATE_NON_VERIFY.format(input=TEST_FILES_DIR+input, dir=TMP_DIRS[1], count=1, seed=seeds[i])
         print(alive_non_verify)
         start=time.time()
@@ -103,8 +105,9 @@ def bench2(input):
         #print(alive_tv)
         end=time.time()
         os.rename(outputFile,getOutputFilename(input,i))
+        alive_tv_res+=end-start
         result+=end-start
-    return result
+    return result,alive_tv_res
 
 def validityCheck(input):
     alive_mutate = ALIVE_MUTATE_MASTER_NON_VERIFY_COMMAND.format(input=input, dir=TMP_DIRS[0], count=COUNT, seed=seed)
@@ -143,8 +146,10 @@ def performExperiment():
         if os.path.isfile(whole_file) and whole_file.endswith(".ll"):
             inputRes=inputCheck(whole_file)
             if inputRes:
-                bench2Res = bench2(file)
+                bench2Res, aliveTvRes = bench2(file)
                 print("bench2 ", bench2Res)
+                print("alive-tv ", aliveTvRes)
+                print("ratio ", aliveTvRes/bench2Res)
                 bench1Res=bench1(file)
                 print("bench1 ",bench1Res)
                 validRes=validityCheck(whole_file)
