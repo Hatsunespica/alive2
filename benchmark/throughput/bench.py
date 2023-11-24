@@ -154,7 +154,7 @@ def performExperiment():
                 print("bench1 ",bench1Res)
                 validRes=validityCheck(whole_file)
             else:
-            	validRes=False
+                validRes=False
                 inputRes=False
             if validRes and inputCheck:
                 total+=1
@@ -171,8 +171,8 @@ def performExperiment():
     else:
         f=open(RES_FILE,"w")
     f.write("Total: "+str(total)+"\n")
-    f.write("Bench1 lst:"+str(bench1Lst)+"\n")
-    f.write("Bench2 lst:"+str( bench2Lst)+"\n")
+    f.write("Alive-mutate lst:"+str(bench1Lst)+"\n")
+    f.write("Discrete tools lst:"+str( bench2Lst)+"\n")
     perfList=[(bench2Lst[i][0]/bench1Lst[i][0], bench1Lst[i][1]) for i in range(len(bench1Lst))]
     f.write("perf lst:"+str(perfList)+"\n")
     f.write("Avg perf:"+str(sum([tmp[0] for tmp in perfList])/len(perfList))+"\n")
