@@ -210,6 +210,9 @@ and "tgt5" will unused.
       M1_anon_count++;
     if (!func_names.empty() && !func_names.count(F1.getName().str()))
       continue;
+    if(opt_src_fn !="src" && !F1.getName().empty() && F1.getName()!=opt_src_fn){
+      continue;
+    }
     unsigned M2_anon_count = 0;
     for (auto &F2 : *M2.get()) {
       if (F2.isDeclaration())
