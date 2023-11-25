@@ -28,9 +28,8 @@ Instructions on benchmakring alive-mutate
 
 # Suggsted workflow
 ## Fuzzing
-1. Change the location of alive-mutate in run.sh if necessary
-2. Execute run.sh
-3. Check mutants in tmp
+1. Execute run.sh
+2. Check mutants in tmp
 ### Suggested customization
 1. Add more files to tests folder and rerun run.sh. You can start with files in https://github.com/llvm/llvm-project/tree/main/llvm/test/Transforms/InstCombine . Randomly select a subset of .ll files, place them under tests folder, and rerun run.sh. You should find new mutants.
 2. Change the command calling alive-mutate like add '--pass="instcombine"' for a different optimization pass. You can also type "alive-mutate --help" to see all arguments.
@@ -38,9 +37,8 @@ Instructions on benchmakring alive-mutate
 
 
 ## Throughput experiment
-1. Change the location of alive-mutate in the global variable **ALIVE_PATH** if necessary
-2. Execute bench.py
-3. Check results in res.txt
+1. Execute bench.py
+2. Check results in res.txt
 ### Suggested customization
 1. Add more fiels to tests folder and rerun bench.py. For example, you can randomly select a number of files from LLVM repo. You can start with files in https://github.com/llvm/llvm-project/tree/main/llvm/test/Transforms/InstCombine . Randomly select a subset of .ll files, place them under tests folder, and rerun bench.py. You should find those added tests in the final res.txt. 
 2. Change the global variable **COUNT** in bench.py. This variable controls the number of mutants generated for each input file.
