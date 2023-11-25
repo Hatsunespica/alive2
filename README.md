@@ -6,7 +6,8 @@ Prerequisites
 To build Alive2 you need recent versions of:
 * [cmake](https://cmake.org)
 * [gcc](https://gcc.gnu.org)/[clang](https://clang.llvm.org)
-  + if g++ version <10
+  + g++ needs >= 10
+  + A method to install `g++-10`
  ```
 sudo apt install g++-10
 sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10
