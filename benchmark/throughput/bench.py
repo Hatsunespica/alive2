@@ -18,7 +18,8 @@ TMP_DIRS = ["./bench1/", "./bench2/"]
 
 RES_FILE="res.txt"
 
-ALIVE_PATH="~/GitRepo/alive2/build/"
+ALIVE_PATH=""
+#ALIVE_PATH="~/GitRepo/alive2/build/"
 
 RANDOM_SEEDS_COMMAND=ALIVE_PATH + "RNG -n {count} -s {seed} > {seeds_file}"
 
