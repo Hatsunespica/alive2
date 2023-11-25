@@ -23,7 +23,6 @@ make
 sudo make install
 ```
 * [LLVM](https://github.com/llvm/llvm-project)
-* [hiredis](https://github.com/redis/hiredis) (optional, needed for caching)
 
 Building LLVM
 --------
