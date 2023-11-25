@@ -28,6 +28,7 @@ sudo make install
 Building LLVM
 --------
 ```
+# the LLVM version when releasing this artifact: 024718313b526a4530d7cd58886fcc157247e0ff
 git clone https://github.com/llvm/llvm-project.git
 cd llvm-project
 mkdir build
@@ -46,6 +47,8 @@ mkdir build
 cd build
 cmake -GNinja -DCMAKE_PREFIX_PATH=~/GitRepo/llvm-project/build -DBUILD_TV=1 -DCMAKE_BUILD_TYPE=Release ..
 ninja
+# We need this path when performing benchmarks
+export PATH=$PATH:$PWD
 ```
 
 If CMake cannot find the Z3 include directory (or finds the wrong one) pass
