@@ -32,7 +32,7 @@ Instructions on benchmakring alive-mutate
 2. Execute run.sh
 3. Check mutants in tmp
 ### Suggested customization
-1. Add more files to tests folder and rerun run.sh
+1. Add more files to tests folder and rerun run.sh. You can start with files in https://github.com/llvm/llvm-project/tree/main/llvm/test/Transforms/InstCombine
 2. Change the command calling alive-mutate like add '--pass="instcombine"' for a different optimization pass. You can also type "alive-mutate --help" to see all arguments.
 3. Change the command '-n 10' to '-n X' where X is the number of mutants you want to generate. Also, you can replace it with '-t 1'. This will make alive-mutate keeps running for 1 second.
 
@@ -42,7 +42,7 @@ Instructions on benchmakring alive-mutate
 2. Execute bench.py
 3. Check results in res.txt
 ### Suggested customization
-1. Add more fiels to tests folder and rerun bench.py. For example, you can randomly select a number of files from LLVM repo.
+1. Add more fiels to tests folder and rerun bench.py. For example, you can randomly select a number of files from LLVM repo. You can start with files in https://github.com/llvm/llvm-project/tree/main/llvm/test/Transforms/InstCombine
 2. Change the global variable **COUNT** in bench.py. This variable controls the number of mutants generated for each input file.
 3. Change the global variable **seed** in bench.py. Thisvariable controls the random seed used for the experiment.
 
