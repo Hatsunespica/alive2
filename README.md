@@ -7,7 +7,16 @@ To build Alive2 you need recent versions of:
 * [cmake](https://cmake.org)
 * [gcc](https://gcc.gnu.org)/[clang](https://clang.llvm.org)
 * [re2c](https://re2c.org/)
+  + `sudo apt-get install re2c`
 * [Z3](https://github.com/Z3Prover/z3)
+```
+git clone https://github.com/Z3Prover/z3
+cd z3
+python scripts/mk_make.py
+cd build
+make
+sudo make install
+```
 * [LLVM](https://github.com/llvm/llvm-project)
 * [hiredis](https://github.com/redis/hiredis) (optional, needed for caching)
 
