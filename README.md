@@ -26,14 +26,11 @@ Building alive-mutate
 --------
 
 ```
-export ALIVE2_HOME=$PWD
-export LLVM2_HOME=$PWD/llvm-project
-export LLVM2_BUILD=$LLVM2_HOME/build
-git clone git@github.com:AliveToolkit/alive2.git
+git clone -b artifacts https://github.com/Hatsunespica/alive2.git
 cd alive2
 mkdir build
 cd build
-cmake -GNinja -DCMAKE_BUILD_TYPE=Release ..
+cmake -GNinja -DCMAKE_PREFIX_PATH=~/GitRepo/llvm-project/build -DBUILD_TV=1 -DCMAKE_BUILD_TYPE=Release ..
 ninja
 ```
 
