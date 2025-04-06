@@ -3,7 +3,7 @@
 
 void ShuffleHelper::init() {
   llvm::Function *func = mutator->currentFunction;
-  shuffleBlockInFunction.init(func->size());
+  shuffleBlockInFunction.grow(func->size());
   for (auto bbIt = func->begin(); bbIt != func->end(); ++bbIt) {
     shuffleBlockInFunction[&*bbIt] = ShuffleUnitInBasicBlock();
     ShuffleUnitInBasicBlock &bSBlock = shuffleBlockInFunction[&*bbIt];
