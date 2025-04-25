@@ -127,20 +127,4 @@ Please contact us or submit a PR if something is missing or inaccurate.
 21. Unsoundness in elim-uncnstr2 (https://github.com/Z3Prover/z3/issues/6506)
 22. Unsound NaN encoding (https://github.com/Z3Prover/z3/issues/6972)
 23. fp.roundToIntegral gives invalid zero_extend application (https://github.com/Z3Prover/z3/issues/7056)
-
-
-### Mutation bugs
-This section is outdated. All bugs are maintained at alive-mutateBuglist.md (under the same folder) instead
-
-#### Confirmed bugs
-1. InstCombine: 2 related logic bugs from over-generalizing "lshr" to "any shr" (https://llvm.org/PR51351)
-2. Inbounds: might cause problem in signed GEP instruction (https://bugs.llvm.org/show_bug.cgi?id=52429)
-3. NUW and NSW flag in InstSimplify (https://reviews.llvm.org/D116322) 
-
-#### Suspected bugs
-1. This bug combines vectors, UB, and non-standard FP (https://alive2.llvm.org/ce/z/jwZ7uS)
-2. LLVM bug. briefly, uitofp(undef) is more defined than undef, the transformation tries to replace uiofp(undef) with undef (in 2nd lane) (https://alive2.llvm.org/ce/z/CYafMt)
-3. Alive2 Bug. bitcast should not change any bits (cite: langref), bitcast in Alive2 (from float to BV) doesn’t follow this rule. (https://alive2.llvm.org/ce/z/CYafMt )
-4. LLVM bug. For the second lane, with the input from cexp, the source evaluates a result with two possible values (either 0x80000000 or 0x00010000, depends on what the undef in %t2 freezes to); the tgt is undef free but it evaluates to a whole different value 0x00000000. (https://alive2.llvm.org/ce/z/_RDXK-)
-5. Alive2 Bug. Alive2 should limit the parapmeter used in malloc. (https://alive2.llvm.org/ce/z/rEGMoF)
-6. Alive2 Bug. Alive2 is not handing nsz correct for fcmp  (https://alive2.llvm.org/ce/z/RWA-EG)
+24. Crash with conversion of a signed 1-bit BV to FP (https://github.com/Z3Prover/z3/commit/322e4441b3a170c9c30c747f10b1d3b0c04e2a0b)
