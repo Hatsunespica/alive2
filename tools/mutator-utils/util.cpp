@@ -28,8 +28,9 @@ unsigned Random::getBitmask(llvm::IntegerType *ty) {
   unsigned size = ty->getBitWidth();
   size = std::min(size, 32u);
   unsigned result = (unsigned)((1ull << size) - 1);
-  unsigned le = (unsigned)((1ull << (1 + getRandomUnsigned() % 32)) - 1);
-  unsigned ri = (unsigned)((1ull << (getRandomUnsigned() % le)) - 1);
+  unsigned bit_size = (1 + getRandomUnsigned() % 32);
+  unsigned le = (unsigned)((1ull << bit_size) - 1);
+  unsigned ri = (unsigned)((1ull << (getRandomUnsigned() % bit_size)) - 1);
   return (result ^ le ^ ri) & result;
 }
 
