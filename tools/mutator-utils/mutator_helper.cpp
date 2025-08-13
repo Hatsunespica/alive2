@@ -359,7 +359,7 @@ void RandomMoveHelper::mutate() {
 }
 
 void RandomMoveHelper::randomMoveInstruction(llvm::Instruction *inst) {
-  if (inst->getNextNonDebugInstruction()->isTerminator()) {
+  if (inst->getNextNode()->isTerminator()) {
     // if(Random::getRandomBool()){
     randomMoveInstructionForward(inst);
   } else if (inst->getIterator() == (inst->getParent()->begin())) {
@@ -385,14 +385,14 @@ void RandomMoveHelper::randomMoveInstructionForward(llvm::Instruction *inst) {
   if (!llvm::isa<llvm::PHINode>(inst)) {
     for (llvm::Instruction *phiInst = &*beginIt;
          llvm::isa<llvm::PHINode>(phiInst);
-         phiInst = phiInst->getNextNonDebugInstruction()) {
+         phiInst = phiInst->getNextNode()) {
       ++beginPos, ++beginIt;
     }
   }
   if (!mutator_util::isPadInstruction(inst)) {
     for (llvm::Instruction *padInst = &*beginIt;
          mutator_util::isPadInstruction(padInst);
-         padInst = padInst->getNextNonDebugInstruction()) {
+         padInst = padInst->getNextNode()) {
       ++beginPos, ++beginIt;
     }
   }
@@ -441,7 +441,7 @@ void RandomMoveHelper::randomMoveInstructionBackward(llvm::Instruction *inst) {
   if (llvm::isa<llvm::PHINode>(inst)) {
     for (llvm::Instruction *phiInst = &*inst->getParent()->begin();
          llvm::isa<llvm::PHINode>(phiInst);
-         phiInst = phiInst->getNextNonDebugInstruction()) {
+         phiInst = phiInst->getNextNode()) {
       ++endPos;
     }
   }
@@ -600,7 +600,7 @@ void VoidFunctionCallRemoveHelper::mutate() {
   assert(llvm::isa<llvm::CallInst>(&*mutator->iitInTmp) &&
          "the void call has to be a call inst to be removed");
   llvm::CallInst *callInst = (llvm::CallInst *)&*mutator->iitInTmp;
-  llvm::Instruction *nextInst = callInst->getNextNonDebugInstruction();
+  llvm::Instruction *nextInst = callInst->getNextNode();
   if (funcName.empty()) {
     funcName = callInst->getName().str();
   }
@@ -1061,7 +1061,7 @@ ResizeIntegerHelper::updateNode(llvm::Instruction *val,
   assert(args.size() == 2);
   if (llvm::isa<llvm::BinaryOperator>(val)) {
     llvm::BinaryOperator *op = (llvm::BinaryOperator *)val;
-    llvm::Instruction *nextInst = op->getNextNonDebugInstruction();
+    llvm::Instruction *nextInst = op->getNextNode();
     llvm::BinaryOperator *newOp = llvm::BinaryOperator::Create(
         op->getOpcode(), args[0], args[1], "", nextInst->getIterator());
     assert(newOp->getType()->isIntOrIntVectorTy());
@@ -1107,7 +1107,7 @@ void ResizeIntegerHelper::updateChain(std::vector<llvm::Instruction *> &chain,
       newChain.push_back(inst);
       args.clear();
     }
-    llvm::Instruction *nextInst = newChain.back()->getNextNonDebugInstruction();
+    llvm::Instruction *nextInst = newChain.back()->getNextNode();
     llvm::Value *extBack = mutator_util::updateIntegerSize(
         newChain.back(), (llvm::IntegerType *)chain.back()->getType(),
         nextInst);
