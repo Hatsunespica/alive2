@@ -404,7 +404,8 @@ bool verifyInput(std::shared_ptr<llvm::Module> &M1) {
 
   if (verifyInputModule) {
     unique_ptr<llvm::Module> M2 = CloneModule(*M1);
-    llvm_util::optimize_module(M2.get(), optPass);
+    auto M2_ptr = M2.get();
+    llvm_util::optimize_module(*M2_ptr, optPass);
 
     llvm::Triple targetTriple(M1.get()->getTargetTriple());
     initVerifier(targetTriple);
@@ -527,7 +528,8 @@ void runOnce(int ith, Mutator &mutator) {
       !disableAlive && pf1 != nullptr) {
     if (!pf1->isDeclaration()) {
       std::unique_ptr<llvm::Module> M2 = llvm::CloneModule(*M1);
-      llvm_util::optimize_module(M2.get(), optPass);
+      auto M2_ptr = M2.get();
+      llvm_util::optimize_module(*M2_ptr, optPass);
       llvm::Function *pf2 = M2->getFunction(pf1->getName());
       if (pf2 != nullptr) {
         verifier->compareFunctions(*pf1, *pf2);
