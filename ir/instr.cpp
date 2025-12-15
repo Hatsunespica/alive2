@@ -1415,12 +1415,13 @@ void TernaryOp::rauw(const Value &what, Value &with) {
 void TernaryOp::print(ostream &os) const {
   const char *str = nullptr;
   switch (op) {
-  case FShl: str = "fshl "; break;
-  case FShr: str = "fshr "; break;
-  case SMulFix: str = "smul_fix "; break;
-  case UMulFix: str = "umul_fix "; break;
+  case FShl:       str = "fshl "; break;
+  case FShr:       str = "fshr "; break;
+  case SMulFix:    str = "smul_fix "; break;
+  case UMulFix:    str = "umul_fix "; break;
   case SMulFixSat: str = "smul_fix_sat "; break;
   case UMulFixSat: str = "umul_fix_sat "; break;
+  case ObjectSize: str = "objectsize "; break;
   }
 
   os << getName() << " = " << str << *a << ", " << *b << ", " << *c;
@@ -1432,34 +1433,40 @@ StateValue TernaryOp::toSMT(State &s) const {
   auto &cv = s[*c];
 
   auto scalar = [&](const auto &a, const auto &b, const auto &c) -> StateValue {
-  expr e, np;
-  switch (op) {
-  case FShl:
-    e = expr::fshl(a.value, b.value, c.value);
-    np = true;
-    break;
-  case FShr:
-    e = expr::fshr(a.value, b.value, c.value);
-    np = true;
-    break;
-  case SMulFix:
-    e = expr::smul_fix(a.value, b.value, c.value);
-    np = expr::smul_fix_no_soverflow(a.value, b.value, c.value);
-    break;
-  case UMulFix:
-    e = expr::umul_fix(a.value, b.value, c.value);
-    np = expr::umul_fix_no_uoverflow(a.value, b.value, c.value);
-    break;
-  case SMulFixSat:
-    e = expr::smul_fix_sat(a.value, b.value, c.value);
-    np = true;
-    break;
-  case UMulFixSat:
-    e = expr::umul_fix_sat(a.value, b.value, c.value);
-    np = true;
-    break;
-  }
-  return { std::move(e), np && a.non_poison && b.non_poison && c.non_poison };
+    StateValue v(expr(), a.non_poison && b.non_poison && c.non_poison);
+    switch (op) {
+    case FShl:
+      v.value = expr::fshl(a.value, b.value, c.value);
+      break;
+    case FShr:
+      v.value = expr::fshr(a.value, b.value, c.value);
+      break;
+    case SMulFix:
+      v.value       = expr::smul_fix(a.value, b.value, c.value);
+      v.non_poison &= expr::smul_fix_no_soverflow(a.value, b.value, c.value);
+      break;
+    case UMulFix:
+      v.value       = expr::umul_fix(a.value, b.value, c.value);
+      v.non_poison &= expr::umul_fix_no_uoverflow(a.value, b.value, c.value);
+      break;
+    case SMulFixSat:
+      v.value = expr::smul_fix_sat(a.value, b.value, c.value);
+      break;
+    case UMulFixSat:
+      v.value = expr::umul_fix_sat(a.value, b.value, c.value);
+      break;
+    case ObjectSize: {
+      Pointer ptr(s.getMemory(), a.value);
+      expr ty = getType().getDummyValue(false).value;
+      expr realval = ptr.leftoverSize().zextOrTrunc(ty.bits());
+      v.value = s.getFreshNondetVar("objectsize", ty);
+      s.addPre(expr::mkIf(b.value == 0 || (ptr.isNull() && c.value == 1),
+                          v.value.uge(realval),
+                          v.value.ule(realval)));
+      break;
+    }
+    }
+    return v;
   };
 
   if (getType().isVectorType()) {
@@ -1499,6 +1506,13 @@ expr TernaryOp::getTypeConstraints(const Function &f) const {
       getType() == b->getType() &&
       c->getType().enforceIntType(32) &&
       getType().enforceIntOrVectorType();
+    break;
+  case ObjectSize:
+    instrconstr =
+      getType().enforceIntType() &&
+      a->getType().enforcePtrType() &&
+      b->getType().enforceIntType(1) &&
+      c->getType().enforceIntType(1);
     break;
   }
   return Value::getTypeConstraints() && instrconstr;
@@ -1704,7 +1718,8 @@ void ConversionOp::print(ostream &os) const {
   case Trunc:    str = "trunc "; break;
   case BitCast:  str = "bitcast "; break;
   case Ptr2Int:  str = "ptrtoint "; break;
-  case Int2Ptr:  str = "int2ptr "; break;
+  case Ptr2Addr: str = "ptrtoaddr "; break;
+  case Int2Ptr:  str = "inttoptr "; break;
   }
 
   os << getName() << " = " << str;
@@ -1759,6 +1774,12 @@ StateValue ConversionOp::toSMT(State &s) const {
       return {s.getMemory().ptr2int(val).zextOrTrunc(to_type.bits()), true};
     };
     break;
+  case Ptr2Addr:
+    fn = [&](auto &&val, auto &to_type) -> StateValue {
+      return
+        { s.getMemory().ptr2int(val, false).zextOrTrunc(to_type.bits()), true };
+    };
+    break;
   case Int2Ptr:
     fn = [&](auto &&val, auto &to_type) -> StateValue {
       return {s.getMemory().int2ptr(val), true};
@@ -1808,6 +1829,7 @@ expr ConversionOp::getTypeConstraints(const Function &f) const {
         getType().sizeVar() == val->getType().sizeVar();
     break;
   case Ptr2Int:
+  case Ptr2Addr:
     c = getType().enforceIntOrVectorType() &&
         val->getType().enforcePtrOrVectorType();
     break;
@@ -1945,7 +1967,7 @@ StateValue FpConversionOp::toSMT(State &s) const {
         np = std::move(no_overflow);
       } else {
         np = true;
-        bv = expr::mkIf(no_overflow, bv, s.getFreshNondetVar("nondet", bv));
+        bv = mkIf_fold(no_overflow, bv, s.getFreshNondetVar("nondet", bv));
       }
 
       if (op == FPToSInt_Sat)
@@ -2873,8 +2895,8 @@ StateValue ICmp::toSMT(State &s) const {
 
       switch (pcmode) {
       case INTEGRAL:
-        m.observesAddr(lhs);
-        m.observesAddr(rhs);
+        m.observesAddr(lhs, false);
+        m.observesAddr(rhs, false);
         return fn(lhs.getAddress(), rhs.getAddress(), cond);
       case PROVENANCE:
         assert(cond == EQ || cond == NE);
@@ -2895,8 +2917,8 @@ StateValue ICmp::toSMT(State &s) const {
         auto &m = s.getMemory();
         Pointer lhs(m, a.value);
         Pointer rhs(m, b.value);
-        m.observesAddr(lhs);
-        m.observesAddr(rhs);
+        m.observesAddr(lhs, false);
+        m.observesAddr(rhs, false);
         np = lhs.getAddress().sign() == rhs.getAddress().sign();
       } else {
         np = a.value.sign() == b.value.sign();
@@ -3407,8 +3429,20 @@ StateValue Return::toSMT(State &s) const {
 
   s.addGuardableUB(s.getMemory().returnChecks());
 
+  // Overwrite any dead_on_return pointee block with poison upon return.
+  auto &m = s.getMemory();
+  const auto &inputs = s.getFn().getInputs();
+  StateValue poison = {expr::mkUInt(0, 8), false};
+  for (auto &arg : inputs) {
+    if (!arg.getType().isPtrType())
+      continue;
+    auto &attrs = static_cast<const Input&>(arg).getAttributes();
+    if (attrs.has(ParamAttrs::DeadOnReturn))
+      m.memset(s[arg].value, poison, {}, bits_byte / 8, {}, false, true);
+  }
+
   vector<pair<Value*, ParamAttrs>> args;
-  for (auto &arg : s.getFn().getInputs()) {
+  for (auto &arg : inputs) {
     args.emplace_back(const_cast<Value*>(&arg), ParamAttrs());
   }
 
@@ -3693,27 +3727,34 @@ StateValue AssumeVal::toSMT(State &s) const {
     break;
   }
 
+  auto scalar = [&](const Type &ty, const StateValue &v) -> StateValue {
+    expr np = fn(v.value);
+
+    if (config::disallow_ub_exploitation)
+      s.addGuardableUB(expr(np));
+
+    if (is_welldefined) {
+      s.addUB(std::move(np));
+      np = true;
+    }
+
+    StateValue res(expr(v.value), v.non_poison && np);
+    // there's no poison in assembly
+    if (s.isAsmMode()) {
+      res = s.freeze(ty, res);
+    }
+    return res;
+  };
+
   auto &v = s.getMaybeUB(*val, is_welldefined);
   if (auto agg = getType().getAsAggregateType()) {
     vector<StateValue> vals;
     for (unsigned i = 0, e = agg->numElementsConst(); i != e; ++i) {
-      auto elem = agg->extract(v, i);
-      vals.emplace_back(expr(elem.value), elem.non_poison && fn(elem.value));
+      vals.emplace_back(scalar(agg->getChild(i), agg->extract(v, i)));
     }
     return getType().getAsAggregateType()->aggregateVals(vals);
   }
-
-  expr np = fn(v.value);
-
-  if (config::disallow_ub_exploitation)
-    s.addGuardableUB(expr(np));
-
-  if (is_welldefined) {
-    s.addUB(std::move(np));
-    np = true;
-  }
-
-  return { expr(v.value), v.non_poison && np };
+  return scalar(getType(), v);
 }
 
 expr AssumeVal::getTypeConstraints(const Function &f) const {
@@ -4011,14 +4052,17 @@ StateValue GEP::toSMT(State &s) const {
     AndExpr inbounds_np;
     AndExpr idx_all_zeros;
 
-    // FIXME: not implemented for physical pointers
-    if (inbounds)
-      inbounds_np.add(ptr.inbounds(false));
+    if (inbounds) {
+      // FIXME: not implemented for physical pointers
+      s.addUB(ptr.isLogical());
+      s.doesApproximation("gep inbounds of phy ptr", !ptr.isLogical(), true);
+      inbounds_np.add(ptr.inbounds(false, true));
+    }
 
     expr offset_sum = expr::mkUInt(0, bits_for_offset);
     for (auto &[sz, idx] : offsets) {
       auto &[v, np] = idx;
-      auto multiplier = expr::mkUInt(sz, bits_for_offset);
+      auto multiplier = expr::mkUInt(sz, offset_sum);
       auto val = v.sextOrTrunc(bits_for_offset);
       auto inc = multiplier * val;
 
@@ -4056,7 +4100,7 @@ StateValue GEP::toSMT(State &s) const {
       non_poison.add(np);
 
       if (inbounds)
-        inbounds_np.add(ptr.inbounds(false));
+        inbounds_np.add(ptr.inbounds(false, true));
     }
 
     if (inbounds) {
@@ -4070,7 +4114,7 @@ StateValue GEP::toSMT(State &s) const {
 
       // try to simplify the pointer
       if (all_zeros.isFalse())
-        ptr.inbounds(true);
+        ptr.inbounds(true, true);
     }
 
     return { std::move(ptr).release(), non_poison() };
@@ -4202,7 +4246,7 @@ DEFINE_AS_RETZEROALIGN(Load, getMaxAllocSize)
 DEFINE_AS_RETZERO(Load, getMaxGEPOffset)
 
 uint64_t Load::getMaxAccessSize() const {
-  return round_up(Memory::getStoreByteSize(getType()), align);
+  return Memory::getStoreByteSize(getType());
 }
 
 MemInstr::ByteAccessInfo Load::getByteAccessInfo() const {
@@ -4248,7 +4292,7 @@ DEFINE_AS_RETZEROALIGN(Store, getMaxAllocSize)
 DEFINE_AS_RETZERO(Store, getMaxGEPOffset)
 
 uint64_t Store::getMaxAccessSize() const {
-  return round_up(Memory::getStoreByteSize(val->getType()), align);
+  return Memory::getStoreByteSize(val->getType());
 }
 
 MemInstr::ByteAccessInfo Store::getByteAccessInfo() const {

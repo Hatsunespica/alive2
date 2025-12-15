@@ -148,8 +148,10 @@ static bool error(Errors &errs, State &src_state, State &tgt_state,
     set<string> approx;
     for (auto *v : { &src_state.getApproximations(),
                      &tgt_state.getApproximations() }) {
-      for (auto &[msg, var] : *v) {
-        if (!var || m.hasFnModel(*var) || var->isConst())
+      for (auto &[msg, var, only_true] : *v) {
+        if (!var ||
+            (only_true && m.eval(*var).isTrue()) ||
+            (!only_true && (var->isConst() || m.hasFnModel(*var))))
           approx.emplace(msg);
       }
     }
@@ -231,17 +233,29 @@ static bool error(Errors &errs, State &src_state, State &tgt_state,
       reduce(var);
     }
   }
-  for (const auto &[var, value] : r.getModel()) {
-    if (!var.fn_name().starts_with("isundef_")) {
-      reduce(var);
-    }
+
+  // check if the model is unique
+  bool unique_model = false;
+  {
+    SolverPush push(solver);
+    solver.block((newr ? &*newr : &r)->getModel());
+    auto tmpr = solver.check("check-uniqueness");
+    unique_model = tmpr.isUnsat();
   }
 
-  // reduce functions. They are a map inputs -> output + else clause
-  // We ignore the else clause as it's not easy to do something with it.
-  for (const auto &[fn, interp] : r.getModel().getFns()) {
-    for (const auto &[var, value] : interp) {
-      reduce(var);
+  if (!unique_model) {
+    for (const auto &[var, value] : r.getModel()) {
+      if (!var.fn_name().starts_with("isundef_")) {
+        reduce(var);
+      }
+    }
+
+    // reduce functions. They are a map inputs -> output + else clause
+    // We ignore the else clause as it's not easy to do something with it.
+    for (const auto &[fn, interp] : r.getModel().getFns()) {
+      for (const auto &[var, value] : interp) {
+        reduce(var);
+      }
     }
   }
 
@@ -252,6 +266,10 @@ static bool error(Errors &errs, State &src_state, State &tgt_state,
   s << msg;
   if (!var_name.empty())
     s << " for " << *var;
+
+  if (unique_model)
+    s << "\n\nNOTE: The counterexample is unique.";
+
   s << "\n\nExample:\n";
 
   for (auto &var: src_state.getFn().getInputs()) {
@@ -1175,11 +1193,13 @@ static void calculateAndInitConstants(Transform &t) {
         has_alloca |= dynamic_cast<const Alloc*>(&i) != nullptr;
 
       } else if (isCast(ConversionOp::Int2Ptr, i) ||
-                  isCast(ConversionOp::Ptr2Int, i)) {
+                 isCast(ConversionOp::Ptr2Int, i) ||
+                 isCast(ConversionOp::Ptr2Addr, i)) {
         max_alloc_size = max_access_size = cur_max_gep = loc_alloc_aligned_size
           = UINT64_MAX;
         has_int2ptr |= isCast(ConversionOp::Int2Ptr, i) != nullptr;
         has_ptr2int |= isCast(ConversionOp::Ptr2Int, i) != nullptr;
+        observes_addresses = true;
 
       } else if (auto *bc = isCast(ConversionOp::BitCast, i)) {
         auto &t = bc->getType();
@@ -1232,7 +1252,6 @@ static void calculateAndInitConstants(Transform &t) {
 
   num_nonlocals = num_nonlocals_src + num_globals - num_globals_src;
 
-  observes_addresses |= has_int2ptr || has_ptr2int;
   // condition can happen with ptr2int(poison) or e.g., load poison
   if ((has_ptr2int || does_mem_access) && num_nonlocals == 0) {
     ++num_nonlocals_src;
@@ -1906,39 +1925,46 @@ void Transform::preprocess() {
       if (!seen.emplace(src_bb).second)
         continue;
 
-      auto tgt_instrs = tgt_bb->instrs();
-      auto II = tgt_instrs.begin(), EE = tgt_instrs.end();
+      unordered_map<unsigned, uint64_t> src_loads, src_stores;
+      uint64_t min_loads = UINT64_MAX, min_stores = UINT64_MAX;
       for (auto &i : src_bb->instrs()) {
-        if (!dynamic_cast<const Load*>(&i) &&
-            !dynamic_cast<const Store*>(&i))
-          continue;
-
-        while (II != EE && !dynamic_cast<const Load*>(&*II) &&
-                           !dynamic_cast<const Store*>(&*II)) {
-          ++II;
-        }
-        if (!(II != EE))
-          break;
-
         if (auto *src_i = dynamic_cast<const Load*>(&i)) {
-          auto *tgt_i = const_cast<Load*>(dynamic_cast<const Load*>(&*II));
-          if (!tgt_i)
-            break;
-          if (src_i->bits() == tgt_i->bits() &&
-              tgt_i->getAlign() < src_i->getAlign())
-            tgt_i->setAlign(src_i->getAlign());
+          auto [it, inserted] = src_loads.emplace(src_i->getType().bits(),
+                                                  src_i->getAlign());
+          if (!inserted)
+            it->second = min(it->second, src_i->getAlign());
+          min_loads = min(min_loads, it->second);
         }
         else if (auto *src_i = dynamic_cast<const Store*>(&i)) {
-          auto *tgt_i = const_cast<Store*>(dynamic_cast<const Store*>(&*II));
-          if (!tgt_i)
-            break;
-          if (src_i->getValue().bits() == tgt_i->getValue().bits() &&
-              tgt_i->getAlign() < src_i->getAlign())
-            tgt_i->setAlign(src_i->getAlign());
-        } else {
-          UNREACHABLE();
+          auto [it, inserted]
+            = src_stores.emplace(src_i->getValue().getType().bits(),
+                                 src_i->getAlign());
+          if (!inserted)
+            it->second = min(it->second, src_i->getAlign());
+          min_stores = min(min_stores, it->second);
         }
-        ++II;
+      }
+
+      for (auto &i : tgt_bb->instrs()) {
+        if (auto *tgt_i = const_cast<Load*>(dynamic_cast<const Load*>(&i))) {
+          unsigned bits = tgt_i->getType().bits();
+          auto it = src_loads.find(bits);
+          if (it != src_loads.end()) {
+            auto new_align = min(min(it->second, min_loads), uint64_t(bits/8));
+            if (tgt_i->getAlign() < new_align)
+              tgt_i->setAlign(new_align);
+          }
+        }
+        else if (auto *tgt_i
+                   = const_cast<Store*>(dynamic_cast<const Store*>(&i))) {
+          unsigned bits = tgt_i->getValue().getType().bits();
+          auto it = src_stores.find(bits);
+          if (it != src_stores.end()) {
+            auto new_align = min(min(it->second, min_stores), uint64_t(bits/8));
+            if (tgt_i->getAlign() < new_align)
+              tgt_i->setAlign(new_align);
+          }
+        }
       }
 
       {

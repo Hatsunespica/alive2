@@ -160,7 +160,8 @@ private:
   // for -disallow-ub-exploitation
   smt::OrExpr unreachable_paths;
 
-  std::set<std::pair<std::string,std::optional<smt::expr>>> used_approximations;
+  std::set<std::tuple<std::string, std::optional<smt::expr>, bool>>
+    used_approximations;
 
   std::set<smt::expr> quantified_vars;
   std::set<smt::expr> nondet_vars;
@@ -213,7 +214,7 @@ private:
     SMTMemoryAccess memaccess;
     bool noret, willret;
 
-    smt::expr implies(const FnCallInput &rhs) const;
+    smt::expr refines(const FnCallInput &rhs) const;
     smt::expr refinedBy(State &s, const std::string &callee,
                         unsigned inaccessible_bid,
                         const std::vector<StateValue> &args_nonptr,
@@ -236,7 +237,7 @@ private:
 
     static FnCallOutput mkIf(const smt::expr &cond, const FnCallOutput &then,
                              const FnCallOutput &els);
-    smt::expr implies(const FnCallOutput &rhs, const Type &retval_ty) const;
+    smt::expr refines(const FnCallOutput &rhs, const Type &retval_ty) const;
     auto operator<=>(const FnCallOutput &rhs) const = default;
   };
   std::map<std::string, std::map<FnCallInput, FnCallOutput>> fn_call_data;
@@ -317,7 +318,8 @@ public:
 
   auto& getVarArgsData() { return var_args_data.data; }
 
-  void doesApproximation(std::string &&name, std::optional<smt::expr> e = {});
+  void doesApproximation(std::string &&name, std::optional<smt::expr> e = {},
+                         bool must_be_true = false);
   auto& getApproximations() const { return used_approximations; }
 
   smt::expr getFreshNondetVar(const char *prefix, const smt::expr &type);

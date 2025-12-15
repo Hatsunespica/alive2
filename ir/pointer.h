@@ -39,7 +39,8 @@ class Pointer {
 public:
   Pointer(const Memory &m, const smt::expr &bid, const smt::expr &offset,
           const smt::expr &attr);
-  Pointer(const Memory &m, const char *var_name, const ParamAttrs &attr);
+  Pointer(const Memory &m, const char *var_name, const ParamAttrs &attr,
+          const std::set<smt::expr> &fn_vars = {});
   Pointer(const Memory &m, smt::expr p);
   Pointer(const Memory &m, unsigned bid, bool local, smt::expr attr = {});
   Pointer(const Memory &m, const smt::expr &bid, const smt::expr &offset,
@@ -87,9 +88,11 @@ public:
   smt::expr getPhysicalAddress() const;
 
   smt::expr blockSize() const;
+  smt::expr blockMaxSize() const;
   smt::expr blockSizeOffsetT() const; // to compare with offsets
-  smt::expr blockSizeAligned() const;
-  smt::expr blockSizeAlignedOffsetT() const; // to compare with offsets
+  smt::expr blockMaxSizeOffsetT() const; // to compare with offsets
+
+  smt::expr leftoverSize() const;
 
   const smt::expr& operator()() const { return p; }
   smt::expr release() && { return std::move(p); }
@@ -114,8 +117,8 @@ public:
                       bool is_phy) const;
   smt::expr isInboundsOf(const Pointer &block, const smt::expr &bytes,
                          bool is_phy) const;
-  smt::expr isInbounds(bool strict) const;
-  smt::expr inbounds(bool simplify_ptr = false);
+  smt::expr isInbounds(bool strict, bool max_size = false) const;
+  smt::expr inbounds(bool simplify_ptr = false, bool max_size = false);
 
   smt::expr blockAlignment() const; // log(bits)
   smt::expr isBlockAligned(uint64_t align, bool exact = false) const;
@@ -125,12 +128,10 @@ public:
   smt::expr isAligned(const smt::expr &align);
   std::pair<smt::AndExpr, smt::expr>
   isDereferenceable(uint64_t bytes, uint64_t align, bool iswrite = false,
-                    bool ignore_accessability = false,
-                    bool round_size_to_align = true);
+                    bool ignore_accessability = false);
   std::pair<smt::AndExpr, smt::expr>
   isDereferenceable(const smt::expr &bytes, uint64_t align, bool iswrite,
-                    bool ignore_accessability = false,
-                    bool round_size_to_align = true);
+                    bool ignore_accessability = false);
 
   void isDisjointOrEqual(const smt::expr &len1, const Pointer &ptr2,
                          const smt::expr &len2) const;
@@ -143,10 +144,13 @@ public:
     STACK,
     MALLOC,
     CXX_NEW,
+    GROWABLE,
+    NUM_ALLOC_TYPES
   };
   smt::expr getAllocType() const;
   smt::expr isStackAllocated(bool simplify = true) const;
   smt::expr isHeapAllocated() const;
+  smt::expr isGrowableAlloc() const;
   smt::expr isNocapture(bool simplify = true) const;
   smt::expr isNoRead() const;
   smt::expr isNoWrite() const;

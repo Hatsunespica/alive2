@@ -115,6 +115,16 @@ unsigned range_idx;
   if (!ty || !a || !b || !c)              \
     return error(i)
 
+#define PARSE_QUADOP()                    \
+  auto ty = llvm_type2alive(i.getType()); \
+  auto a = get_operand(i.getOperand(0));  \
+  auto b = get_operand(i.getOperand(1));  \
+  auto c = get_operand(i.getOperand(2));  \
+  auto d = get_operand(i.getOperand(3));  \
+  if (!ty || !a || !b || !c || !d)        \
+    return error(i)
+
+
 class llvm2alive_ : public llvm::InstVisitor<llvm2alive_, unique_ptr<Instr>> {
   BasicBlock *BB;
   Function *alive_fn;
@@ -279,12 +289,13 @@ public:
       ConversionOp::Op op;
       bool has_non_fp = true;
       switch (i.getOpcode()) {
-      case llvm::Instruction::SExt:     op = ConversionOp::SExt; break;
-      case llvm::Instruction::ZExt:     op = ConversionOp::ZExt; break;
-      case llvm::Instruction::Trunc:    op = ConversionOp::Trunc; break;
-      case llvm::Instruction::BitCast:  op = ConversionOp::BitCast; break;
-      case llvm::Instruction::PtrToInt: op = ConversionOp::Ptr2Int; break;
-      case llvm::Instruction::IntToPtr: op = ConversionOp::Int2Ptr; break;
+      case llvm::Instruction::SExt:      op = ConversionOp::SExt; break;
+      case llvm::Instruction::ZExt:      op = ConversionOp::ZExt; break;
+      case llvm::Instruction::Trunc:     op = ConversionOp::Trunc; break;
+      case llvm::Instruction::BitCast:   op = ConversionOp::BitCast; break;
+      case llvm::Instruction::PtrToInt:  op = ConversionOp::Ptr2Int; break;
+      case llvm::Instruction::PtrToAddr: op = ConversionOp::Ptr2Addr; break;
+      case llvm::Instruction::IntToPtr:  op = ConversionOp::Int2Ptr; break;
       default: has_non_fp = false; break;
       }
       if (has_non_fp) {
@@ -903,16 +914,18 @@ public:
     case llvm::Intrinsic::umul_fix:
     case llvm::Intrinsic::smul_fix_sat:
     case llvm::Intrinsic::umul_fix_sat:
+    case llvm::Intrinsic::objectsize:
     {
       PARSE_TRIOP();
       TernaryOp::Op op;
       switch (i.getIntrinsicID()) {
-      case llvm::Intrinsic::fshl: op = TernaryOp::FShl; break;
-      case llvm::Intrinsic::fshr: op = TernaryOp::FShr; break;
-      case llvm::Intrinsic::smul_fix: op = TernaryOp::SMulFix; break;
-      case llvm::Intrinsic::umul_fix: op = TernaryOp::UMulFix; break;
+      case llvm::Intrinsic::fshl:         op = TernaryOp::FShl; break;
+      case llvm::Intrinsic::fshr:         op = TernaryOp::FShr; break;
+      case llvm::Intrinsic::smul_fix:     op = TernaryOp::SMulFix; break;
+      case llvm::Intrinsic::umul_fix:     op = TernaryOp::UMulFix; break;
       case llvm::Intrinsic::smul_fix_sat: op = TernaryOp::SMulFixSat; break;
       case llvm::Intrinsic::umul_fix_sat: op = TernaryOp::UMulFixSat; break;
+      case llvm::Intrinsic::objectsize:   op = TernaryOp::ObjectSize; break;
       default: UNREACHABLE();
       }
       ret = make_unique<TernaryOp>(*ty, value_name(i), *a, *b, *c, op);
@@ -1216,6 +1229,26 @@ public:
           UNREACHABLE();
         }
         return make_unique<X86IntrinTerOp>(*ty, value_name(i), *a, *b, *c, op);
+      }
+
+#define PROCESS(NAME) case llvm::Intrinsic::NAME:
+#include "ir/x86_intrinsics_quadop.inc"
+#undef PROCESS
+      {
+        PARSE_QUADOP();
+        X86IntrinQuadOp::Op op;
+        switch (i.getIntrinsicID()) {
+#define PROCESS(NAME)                                                          \
+  case llvm::Intrinsic::NAME:                                                  \
+    op = X86IntrinQuadOp::NAME;                                                \
+    break;
+#include "ir/x86_intrinsics_quadop.inc"
+#undef PROCESS
+        default:
+          UNREACHABLE();
+        }
+        return
+          make_unique<X86IntrinQuadOp>(*ty, value_name(i), *a, *b, *c, *d, op);
       }
 
     default:
@@ -1585,6 +1618,10 @@ public:
 
       case llvm::Attribute::DeadOnUnwind:
         attrs.set(ParamAttrs::DeadOnUnwind);
+        break;
+
+      case llvm::Attribute::DeadOnReturn:
+        attrs.set(ParamAttrs::DeadOnReturn);
         break;
 
       case llvm::Attribute::Initializes:

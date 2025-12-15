@@ -55,6 +55,8 @@ ostream& operator<<(ostream &os, const ParamAttrs &attr) {
     os << "allocalign ";
   if (attr.has(ParamAttrs::DeadOnUnwind))
     os << "dead_on_unwind ";
+  if (attr.has(ParamAttrs::DeadOnReturn))
+    os << "dead_on_return ";
   if (attr.has(ParamAttrs::Writable))
     os << "writable ";
   if (!attr.initializes.empty()) {
@@ -670,10 +672,11 @@ void TailCallInfo::check(State &s, const Instr &i,
   // Exception: alloca or byval arg may be passed to the callee as byval
   for (const auto &arg : args) {
     Pointer ptr(s.getMemory(), arg.val.value);
-    s.addUB(arg.val.non_poison.implies(
+    // if the ptr is poison, it can be replaced by an alloca
+    s.addUB(arg.val.non_poison &&
       (ptr.isStackAllocated() || ptr.isByval()).implies(arg.byval != 0) &&
       true // TODO: check for !var_args
-    ));
+    );
   }
 
   if (type != TailCallInfo::MustTail)

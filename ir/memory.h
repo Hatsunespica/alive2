@@ -177,8 +177,7 @@ class Memory {
   AliasSet escaped_local_blks;
   AliasSet observed_addrs;
 
-  void escape_helper(const smt::expr &ptr, AliasSet &set1,
-                     AliasSet *set2 = nullptr);
+  void escape_helper(const smt::expr &ptr, bool escapes);
 
   bool hasEscapedLocals() const {
     return escaped_local_blks.numMayAlias(true) > 0;
@@ -201,8 +200,9 @@ class Memory {
   smt::expr mkSubByteZExtStoreCond(const Byte &val, const Byte &val2) const;
   void mkNonlocalValAxioms(const smt::expr &block) const;
 
-  bool mayalias(bool local, unsigned bid, const smt::expr &offset,
-                const smt::expr &bytes, uint64_t align, bool write) const;
+  bool mayalias(const Pointer &p, bool local, unsigned bid,
+                const smt::expr &offset, const smt::expr &bytes, uint64_t align,
+                bool write) const;
 
   AliasSet computeAliasing(const Pointer &ptr, const smt::expr &bytes,
                            uint64_t align, bool write) const;
@@ -231,7 +231,8 @@ class Memory {
   void storeLambda(const Pointer &ptr, const smt::expr &offset,
                    const smt::expr &bytes,
                    const std::vector<std::pair<unsigned, smt::expr>> &data,
-                   const std::set<smt::expr> &undef, uint64_t align);
+                   const std::set<smt::expr> &undef, uint64_t align,
+                   bool full_write = false);
 
   // to implement the 'initializes' parameter attribute
   smt::expr hasStored(const Pointer &p, const smt::expr &bytes) const;
@@ -257,6 +258,7 @@ public:
   // TODO: missing local_* equivalents
   class CallState {
     std::vector<smt::expr> non_local_block_val;
+    std::vector<smt::expr> non_local_sizes;
     smt::expr non_local_liveness;
     smt::expr writes_block;
     smt::expr writes_args;
@@ -322,6 +324,9 @@ public:
   // Start lifetime of a local block.
   void startLifetime(const StateValue &ptr);
 
+  // Constrain freeze pointer to currently used blocks for POR optimization
+  void constrainFreezePointer(const Pointer &ptr);
+
   // If unconstrained is true, the pointer offset, liveness, and block kind
   // are not checked.
   void free(const StateValue &ptr, bool unconstrained);
@@ -338,7 +343,8 @@ public:
 
   void memset(const smt::expr &ptr, const StateValue &val,
               const smt::expr &bytesize, uint64_t align,
-              const std::set<smt::expr> &undef_vars, bool deref_check = true);
+              const std::set<smt::expr> &undef_vars, bool deref_check = true,
+              bool full_write = false);
 
   void memset_pattern(const smt::expr &ptr, const smt::expr &pattern,
                       const smt::expr &bytesize, unsigned pattern_length);
@@ -352,7 +358,7 @@ public:
 
   void fillPoison(const smt::expr &bid);
 
-  smt::expr ptr2int(const smt::expr &ptr);
+  smt::expr ptr2int(const smt::expr &ptr, bool escape = true);
   smt::expr int2ptr(const smt::expr &val);
 
   std::tuple<smt::expr, Pointer, std::set<smt::expr>>
@@ -361,7 +367,7 @@ public:
             const std::vector<PtrInput> *set_ptrs_other = nullptr) const;
 
   void escapeLocalPtr(const smt::expr &ptr, const smt::expr &is_ptr);
-  void observesAddr(const Pointer &ptr);
+  void observesAddr(const Pointer &ptr, bool escapes);
 
   smt::expr returnChecks() const;
   smt::expr checkNocapture() const;

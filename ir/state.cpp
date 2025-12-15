@@ -384,6 +384,8 @@ expr State::strip_undef_and_add_ub(const Value &val, const expr &e,
   vector<pair<expr,expr>> repls;
   set<expr> missing_tests;
   expr conds = true;
+  bool has_undef = false;
+
   for (auto &var : vars) {
     if (var.fn_name().starts_with("isundef_")) {
       expr test = var == 0;
@@ -393,16 +395,12 @@ expr State::strip_undef_and_add_ub(const Value &val, const expr &e,
       } else {
         missing_tests.emplace(var);
       }
+    } else {
+      has_undef = has_undef || isUndef(var);
     }
   }
 
-  // some sort of undef concatenated with something else
-  if (repls.empty() && missing_tests.empty()) {
-    addUB(expr(false));
-    return expr::mkNumber("0", e);
-  }
-
-  if (missing_tests.empty())
+  if (missing_tests.empty() && !has_undef)
     return e.subst_simplify(repls);
 
   expr e2;
@@ -670,6 +668,10 @@ StateValue State::freeze(const Type &ty, const StateValue &v) {
 
   expr nondet = expr::mkFreshVar("nondet", v.value);
   addQuantVar(nondet);
+
+  if (ty.isPtrType())
+    memory.constrainFreezePointer({ memory, nondet });
+
   return { expr::mkIf(v.non_poison, v.value, nondet), true };
 }
 
@@ -938,10 +940,15 @@ void State::addUnreachable() {
   unreachable_paths.add(domain());
 }
 
-expr State::FnCallInput::implies(const FnCallInput &rhs) const {
-  if (noret != rhs.noret || willret != rhs.willret ||
-      (rhs.memaccess.canReadSomething().isTrue() &&
-        (fncall_ranges != rhs.fncall_ranges || is_neq(m <=> rhs.m))))
+expr State::FnCallInput::refines(const FnCallInput &rhs) const {
+  if (rhs.memaccess.canReadSomething().isTrue() &&
+      (fncall_ranges != rhs.fncall_ranges || is_neq(m <=> rhs.m)))
+    return false;
+
+  // we can remove attributes, but not add new ones
+  if (noret && !rhs.noret)
+    return false;
+  if (willret && !rhs.willret)
     return false;
 
   AndExpr eq;
@@ -964,9 +971,13 @@ expr State::FnCallInput::refinedBy(
   const Memory &m2, const SMTMemoryAccess &memaccess2, bool noret2,
   bool willret2) const {
 
-  if (noret != noret2 ||
-      willret != willret2 ||
-      !fncall_ranges.overlaps(callee, memaccess2, fncall_ranges2))
+  if (!fncall_ranges.overlaps(callee, memaccess2, fncall_ranges2))
+    return false;
+
+  // we can remove attributes, but not add new ones
+  if (noret2 && !noret)
+    return false;
+  if (willret2 && !willret)
     return false;
 
   AndExpr refines;
@@ -1049,7 +1060,7 @@ State::FnCallOutput State::FnCallOutput::mkIf(const expr &cond,
   return ret;
 }
 
-expr State::FnCallOutput::implies(const FnCallOutput &rhs,
+expr State::FnCallOutput::refines(const FnCallOutput &rhs,
                                   const Type &retval_ty) const {
   expr ret = ub == rhs.ub;
   ret     &= noreturns == rhs.noreturns;
@@ -1258,9 +1269,9 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
       for (auto II = calls_fn.begin(), E = calls_fn.end(); II != E; ++II) {
         if (II == I)
           continue;
-        auto in_eq = I->first.implies(II->first);
+        auto in_eq = I->first.refines(II->first);
         if (!in_eq.isFalse())
-          fn_call_pre &= in_eq.implies(I->second.implies(II->second, out_type));
+          fn_call_pre &= in_eq.implies(I->second.refines(II->second, out_type));
       }
     }
 
@@ -1336,8 +1347,9 @@ State::addFnCall(const string &name, vector<StateValue> &&inputs,
   return retval;
 }
 
-void State::doesApproximation(string &&name, optional<expr> e) {
-  used_approximations.emplace(std::move(name), std::move(e));
+void State::doesApproximation(string &&name, optional<expr> e,
+                              bool must_be_true) {
+  used_approximations.emplace(std::move(name), std::move(e), must_be_true);
 }
 
 void State::addQuantVar(const expr &var) {

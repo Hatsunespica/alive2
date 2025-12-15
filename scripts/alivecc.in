@@ -52,6 +52,10 @@ if (compiling()) {
         $print_cmd = 1;
     }
 
+    if (my $pass = getenv("ALIVECC_CHECK_PASS")) {
+        push @ARGV, ("-mllvm", "-tv-check-pass=".$pass);
+    }
+
     if (getenv("ALIVECC_QUIET")) {
         push @ARGV, ("-mllvm", "-tv-quiet");
     }
@@ -102,6 +106,14 @@ if (compiling()) {
 
     if (my $logir = getenv("ALIVECC_SAVE_IR")) {
         push @ARGV, ("-mllvm", "-tv-save-ir");
+    }
+
+    if (my $unroll = getenv("ALIVECC_SRC_UNROLL")) {
+        push @ARGV, ("-mllvm", "-tv-src-unroll=".$unroll);
+    }
+
+    if (my $unroll = getenv("ALIVECC_TGT_UNROLL")) {
+        push @ARGV, ("-mllvm", "-tv-tgt-unroll=".$unroll);
     }
 
     # sanity check: make sure we intercepted all environment variables
