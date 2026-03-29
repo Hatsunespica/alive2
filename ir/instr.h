@@ -224,6 +224,41 @@ public:
 };
 
 
+class FpUnaryReductionOp final : public Instr {
+public:
+  enum Op {
+    FMin, FMax, FMinimum, FMaximum
+  };
+
+private:
+  Value *val;
+  Op op;
+  FastMathFlags fmath;
+  FpRoundingMode rm;
+  FpExceptionMode ex;
+
+public:
+  FpUnaryReductionOp(Type &type, std::string &&name, Value &val, Op op,
+                     FastMathFlags fmath, FpRoundingMode rm, FpExceptionMode ex)
+  : Instr(type, std::move(name)), val(&val), op(op), fmath(fmath), rm(rm), ex(ex) {}
+
+  Op getOp() const { return op; }
+
+  FastMathFlags getFastMathFlags() const { return fmath; }
+  FpRoundingMode getRoundingMode() const { return rm; }
+  FpExceptionMode getExceptionMode() const { return ex; }
+  std::vector<Value *> operands() const override;
+  bool propagatesPoison() const override;
+  bool hasSideEffects() const override;
+  void rauw(const Value &what, Value &with) override;
+  void print(std::ostream &os) const override;
+  StateValue toSMT(State &s) const override;
+  smt::expr getTypeConstraints(const Function &f) const override;
+  std::unique_ptr<Instr>
+    dup(Function &f, const std::string &suffix) const override;
+};
+
+
 class TernaryOp final : public Instr {
 public:
   enum Op { FShl, FShr, SMulFix, UMulFix, SMulFixSat, UMulFixSat,
@@ -694,7 +729,8 @@ public:
   virtual uint64_t getMaxGEPOffset() const = 0;
 
   struct ByteAccessInfo {
-    bool hasIntByteAccess = false;
+    bool doesIntLoad = false;
+    bool doesIntStore = false;
     bool doesPtrLoad = false;
     bool doesPtrStore = false;
     bool observesAddresses = false;
@@ -708,10 +744,10 @@ public:
 
     bool doesMemAccess() const { return byteSize; }
 
-    static ByteAccessInfo intOnly(unsigned byteSize);
+    static ByteAccessInfo intLoad(unsigned byteSize);
+    static ByteAccessInfo intStore(unsigned byteSize);
     static ByteAccessInfo anyType(unsigned byteSize);
     static ByteAccessInfo get(const Type &t, bool store, unsigned align);
-    static ByteAccessInfo full(unsigned byteSize);
   };
 
   virtual ByteAccessInfo getByteAccessInfo() const = 0;
@@ -1029,27 +1065,6 @@ public:
                 unsigned pattern_length, TailCallInfo tci);
 
   unsigned getPatternLength() const { return pattern_length; }
-
-  std::pair<uint64_t, uint64_t> getMaxAllocSize() const override;
-  uint64_t getMaxAccessSize() const override;
-  uint64_t getMaxGEPOffset() const override;
-  ByteAccessInfo getByteAccessInfo() const override;
-
-  std::vector<Value*> operands() const override;
-  bool propagatesPoison() const override;
-  void rauw(const Value &what, Value &with) override;
-  void print(std::ostream &os) const override;
-  StateValue toSMT(State &s) const override;
-  smt::expr getTypeConstraints(const Function &f) const override;
-  std::unique_ptr<Instr>
-    dup(Function &f, const std::string &suffix) const override;
-};
-
-
-class FillPoison final : public MemInstr {
-  Value *ptr;
-public:
-  FillPoison(Value &ptr) : MemInstr(Type::voidTy, "fillpoison"), ptr(&ptr) {}
 
   std::pair<uint64_t, uint64_t> getMaxAllocSize() const override;
   uint64_t getMaxAccessSize() const override;
