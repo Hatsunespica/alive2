@@ -145,7 +145,7 @@ void MutateInstructionHelper::debug() {
 
 void MutateInstructionHelper::mutate() {
   // do extra handling for br insts
-  if (llvm::isa<llvm::BranchInst>(mutator->iitInTmp)) {
+  if (llvm::isa<llvm::UncondBrInst>(mutator->iitInTmp)||llvm::isa<llvm::CondBrInst>(mutator->iitInTmp)) {
     // empty for now
   }
   // 75% chances to add a new inst, 25% chances to replace with a existent usage

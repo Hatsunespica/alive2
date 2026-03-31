@@ -254,7 +254,7 @@ bool FunctionMutator::canMutate(const llvm::Instruction &inst,
 
 bool FunctionMutator::canMutate(const llvm::BasicBlock &block,
                                 const llvm::StringSet<> &filterSet) {
-  return !block.instructionsWithoutDebug().empty() &&
+  return !block.empty() &&
          std::any_of(block.begin(), block.end(),
                      [&filterSet](const llvm::Instruction &inst) {
                        return canMutate(inst, filterSet);
